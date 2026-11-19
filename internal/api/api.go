@@ -93,9 +93,18 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/sessions/{id}/tabs/{tab}/cookies", s.auth(s.handleGetCookies))
 	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/cookies", s.auth(s.handleSetCookies))
 	s.mux.HandleFunc("DELETE /v1/sessions/{id}/tabs/{tab}/cookies", s.auth(s.handleClearCookies))
+	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/evaluate", s.auth(s.handleEvaluate))
+	s.mux.HandleFunc("GET /v1/sessions/{id}/tabs/{tab}/pdf", s.auth(s.handlePDF))
+	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/pdf", s.auth(s.handlePDF))
+	s.mux.HandleFunc("GET /v1/sessions/{id}/tabs/{tab}/storage", s.auth(s.handleGetStorage))
+	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/storage", s.auth(s.handlePostStorage))
+	s.mux.HandleFunc("DELETE /v1/sessions/{id}/tabs/{tab}/storage", s.auth(s.handleClearStorage))
+	s.mux.HandleFunc("GET /v1/sessions/{id}/tabs/{tab}/dialogs", s.auth(s.handleGetDialogs))
+	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/dialogs", s.auth(s.handlePostDialogs))
 
 	s.mux.HandleFunc("GET /v1/companion", s.auth(s.handleGetCompanion))
 	s.mux.HandleFunc("POST /v1/companion", s.auth(s.handlePostCompanion))
+	s.mux.HandleFunc("POST /v1/companion/selection", s.auth(s.handleCompanionSelection))
 
 	if s.cfg.MCPHandler != nil {
 		s.mux.HandleFunc("/mcp", s.auth(s.cfg.MCPHandler.ServeHTTP))
@@ -497,6 +506,128 @@ func (s *Server) handlePostCompanion(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	out, apiErr := s.cfg.Manager.Companion(ctx, req)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleCompanionSelection(w http.ResponseWriter, r *http.Request) {
+	var req types.SelectionRequest
+	if apiErr := decodeJSON(r, &req, s.cfg.MaxBodyBytes, false); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.CompanionSelection(ctx, req)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
+	var req types.EvaluateRequest
+	if apiErr := decodeJSON(r, &req, s.cfg.MaxBodyBytes, false); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.Evaluate(ctx, r.PathValue("id"), r.PathValue("tab"), req)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handlePDF(w http.ResponseWriter, r *http.Request) {
+	var req types.PDFRequest
+	if r.Method == http.MethodPost {
+		if apiErr := decodeJSON(r, &req, s.cfg.MaxBodyBytes, true); apiErr != nil {
+			writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	pdf, apiErr := s.cfg.Manager.PDF(ctx, r.PathValue("id"), r.PathValue("tab"), req)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Length", fmt.Sprint(len(pdf)))
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(pdf)
+}
+
+func (s *Server) handleGetStorage(w http.ResponseWriter, r *http.Request) {
+	area := r.URL.Query().Get("area")
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.Storage(ctx, r.PathValue("id"), r.PathValue("tab"), types.StorageRequest{
+		Area:   area,
+		Action: "get",
+	})
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handlePostStorage(w http.ResponseWriter, r *http.Request) {
+	var req types.StorageRequest
+	if apiErr := decodeJSON(r, &req, s.cfg.MaxBodyBytes, false); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.Storage(ctx, r.PathValue("id"), r.PathValue("tab"), req)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleClearStorage(w http.ResponseWriter, r *http.Request) {
+	area := r.URL.Query().Get("area")
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	if _, apiErr := s.cfg.Manager.Storage(ctx, r.PathValue("id"), r.PathValue("tab"), types.StorageRequest{
+		Area:   area,
+		Action: "clear",
+	}); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGetDialogs(w http.ResponseWriter, r *http.Request) {
+	out, apiErr := s.cfg.Manager.Dialogs(r.Context(), r.PathValue("id"), r.PathValue("tab"), nil)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handlePostDialogs(w http.ResponseWriter, r *http.Request) {
+	var req types.DialogPolicyRequest
+	if apiErr := decodeJSON(r, &req, s.cfg.MaxBodyBytes, true); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	out, apiErr := s.cfg.Manager.Dialogs(r.Context(), r.PathValue("id"), r.PathValue("tab"), &req)
 	if apiErr != nil {
 		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
 		return

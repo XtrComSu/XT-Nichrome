@@ -1,6 +1,6 @@
 # XT-Nichrome Model Context Protocol (MCP) Server & Companion 2nd Cursor
 
-XT-Nichrome ships a first-class MCP server (`internal/mcpserver`) built on the official Go SDK (`github.com/modelcontextprotocol/go-sdk v1.8.0`) exposing **29 typed tools** across session management, tab lifecycle, Playwright/Camofox+ humanized interactions, structured extraction, console/network telemetry, cookie state, and the **Ni-Cursor 2nd Companion Cursor** (native Wayland/Hyprland `wlr-layer-shell` overlay + in-browser Shadow DOM overlay).
+XT-Nichrome ships a first-class MCP server (`internal/mcpserver`) built on the official Go SDK (`github.com/modelcontextprotocol/go-sdk v1.8.0`) exposing **35 typed tools** across session management, tab lifecycle, Playwright/Camofox+ humanized interactions, JavaScript evaluation, PDF rendering, Web Storage (`localStorage`/`sessionStorage`), file uploads, dialog handling, structured extraction, console/network telemetry, cookie state, and the **Ni-Cursor 2nd Companion Cursor** (native Wayland/Hyprland `wlr-layer-shell` overlay + in-browser Shadow DOM overlay + real-time highlight/selection responder).
 
 ## 1. Transports
 
@@ -34,7 +34,7 @@ Mounts `/mcp` on the `nichrome` HTTP daemon behind the same constant-time `Autho
 ./bin/nichrome -listen 127.0.0.1:7788 -allow https://example.com -mcp-http
 ```
 
-## 2. Complete 29-Tool Inventory
+## 2. Complete 35-Tool Inventory
 
 ### Session & Tab Lifecycle (6 Tools)
 | Tool | Arguments | Description |
@@ -56,7 +56,7 @@ Mounts `/mcp` on the `nichrome` HTTP daemon behind the same constant-time `Autho
 | `browser_wait_for` | `text?`, `textGone?`, `timeMs?`, `timeoutMs?`, `sessionId?`, `tabId?` | Waits for visible text to appear, `textGone` to disappear, or a fixed `timeMs` pause. |
 | `browser_snapshot` | `maxChars?`, `maxRefs?`, `includeValues?`, `scope?`, `sessionId?`, `tabId?` | Captures a compact accessibility tree with `@eN` handles and remembers `snapshotId`. |
 
-### Humanized Interactions (9 Tools — Playwright + Camofox+)
+### Humanized Interactions (10 Tools — Playwright + Camofox+)
 | Tool | Arguments | Description |
 | --- | --- | --- |
 | `browser_click` | `ref`, `button?`, `clickCount?`, `snapshotId?`, `generation?`, `timeoutMs?` | Moves along a minimum-jerk Bézier curve to an interior point of `@eN` and clicks with `18–42ms` press dwell. |
@@ -68,32 +68,41 @@ Mounts `/mcp` on the `nichrome` HTTP daemon behind the same constant-time `Autho
 | `browser_check` | `ref`, `snapshotId?`, `timeoutMs?` | Idempotently checks a checkbox, radio, or switch (`@eN`). |
 | `browser_uncheck` | `ref`, `snapshotId?`, `timeoutMs?` | Idempotently unchecks a checkbox or switch (`@eN`). |
 | `browser_drag` | `ref`, `targetRef`, `snapshotId?`, `timeoutMs?` | Humanized drag-and-drop from `@eN` (`ref`) onto `@eM` (`targetRef`) along a minimum-jerk curve with `buttons: 1` held. |
+| `browser_upload_file` | `ref`, `files`, `snapshotId?`, `timeoutMs?` | Glides to an `<input type="file">` (`@eN`) and attaches local file paths via CDP `DOM.setFileInputFiles`. |
 
-### Extraction, Cookies, Telemetry & Diagnostics (6 Tools)
+### Evaluation, Storage, PDF, Extraction, Cookies & Telemetry (10 Tools)
 | Tool | Arguments | Description |
 | --- | --- | --- |
+| `browser_evaluate` | `expression`, `ref?`, `snapshotId?`, `timeoutMs?` | Evaluates a JS expression in the page context, or invokes `el => ...` on a verified `@eN` DOM element. |
+| `browser_pdf` | `outputPath?`, `landscape?`, `printBackground?`, `scale?` | Renders the active tab to PDF via `Page.printToPDF`, saving to `outputPath` or returning base64 bytes. |
+| `browser_storage` | `area?` (`local`\|`session`), `action?` (`get`\|`set`\|`clear`), `entries?` | Inspects, seeds, or clears `localStorage` or `sessionStorage` on the active origin. |
+| `browser_dialogs` | `accept?`, `promptText?`, `clearLog?` | Returns captured JS `alert`/`confirm`/`prompt`/`beforeunload` dialogs and configures how the next dialog is handled. |
 | `browser_extract` | `maxChars?`, `maxLinks?`, `sessionId?`, `tabId?` | Extracts clean visible text, `h1-h3` headings, deduplicated `[text, href]` links, and scroll geometry (`scrollY`, `scrollHeight`). |
 | `browser_cookies` | `action?` (`get`\|`set`\|`clear`), `cookies?`, `sessionId?`, `tabId?` | Reads, seeds (validated against the origin allowlist), or clears browser context cookies. |
-| `browser_telemetry` | `sessionId?`, `tabId?` | Returns the tab's ring-buffered console messages (`console.log/warn/error`) and network requests/responses (`status`, `mimeType`, `failed`). |
+| `browser_telemetry` | `sessionId?`, `tabId?` | Returns the tab's ring-buffered console messages, network requests/responses, and JS dialogs. |
 | `browser_screenshot` | `sessionId?`, `tabId?` | Returns a viewport PNG as an `mcp.ImageContent` (`image/png`) block. |
 | `browser_persona` | `sessionId?`, `tabId?` | Verifies the live tab's stealth identity and reports `consistent` + any mismatches. |
 | `browser_ready` | *(none)* | Reports daemon readiness, capacity, and egress policy denial counts. |
 
-### Companion 2nd Cursor ("Ni-Cursor" — Wayland/Hyprland + In-Browser) (2 Tools)
+### Companion 2nd Cursor ("Ni-Cursor" — Wayland/Hyprland + In-Browser) (3 Tools)
 | Tool | Arguments | Description |
 | --- | --- | --- |
 | `companion_cursor_guide` | `message`, `ref?`, `x?`, `y?`, `mood?`, `subtext?`, `pulse?`, `sessionId?`, `tabId?`, `snapshotId?` | Glides the 2nd mini-cursor onto `(x, y)` or a snapshot `@eN` element, sets its mood (`friendly`, `curious`, `warn`, `sad`, `excited`, `thinking`), and shows a floating chat bubble (e.g. `"hey, you should click this to help me!"` or `"hey, this person isnt nice :("`). |
 | `companion_cursor_control` | `action` (`status`\|`show`\|`hide`\|`clear`), `followActions?` | Shows, hides, clears, or queries the companion cursor state, or toggles `followActions` auto-narration. |
+| `companion_analyze_selection` | `text?`, `readPrimary?`, `windowClass?`, `windowTitle?`, `guide?`, `x?`, `y?` | Analyzes highlighted text (or reads Wayland primary selection via `wl-paste --primary`), classifies tone/intent (hostile chat, friendly chat, question, URL, error trace, dangerous command, or base64/hex/timestamp/JSON), and optionally pops up `Ni-Cursor` with a real-time reply. |
 
 ## 3. Native Wayland / Hyprland Layer-Shell Overlay (`cmd/nichrome-cursor`)
 
 On Wayland compositors supporting `wlr-layer-shell` (such as Hyprland and Sway), XT-Nichrome renders the 2nd companion cursor directly on the desktop `OVERLAY` layer (`internal/companion/wayland_overlay.c` compiled into `bin/nichrome-cursor-wayland`):
 - **100% Click-Through:** Applies an empty `cairo_region_t` input mask via `gdk_window_input_shape_combine_region` and `GTK_LAYER_SHELL_KEYBOARD_MODE_NONE` so the user's real mouse clicks, hovers, and keystrokes pass straight through to windows underneath.
 - **60 FPS Minimum-Jerk Glide:** Animates smoothly between targets along a quadratic/cubic Bézier arc with a Flash & Hogan minimum-jerk velocity profile ($10u^3 - 15u^4 + 6u^5$), gentle idle bobbing, and expanding crimson attention rings.
-- **Standalone CLI Demo:**
+- **On-Demand Selection-Triggered Activation (`-watch-selection -auto-hide 6s`):** Keeps the overlay completely hidden until the user highlights text in Discord, a browser, or a terminal (`wl-paste --primary`), then glides to the cursor, displays a real-time contextual reply, and auto-hides after 6 seconds.
+- **Standalone CLI Usage:**
   ```bash
   make cursor
   ./bin/nichrome-cursor -demo
+  # On-demand highlight/selection responder (stays hidden until you select text, auto-hides after 6s):
+  ./bin/nichrome-cursor -listen 127.0.0.1:7798 -watch-selection -auto-hide 6s
   # Or guide to a specific spot on Hyprland:
   ./bin/nichrome-cursor -x 820 -y 440 -mood friendly -subtext "@e4 • Confirm" -say "hey, you should click this to help me!" -duration 5s
   ```

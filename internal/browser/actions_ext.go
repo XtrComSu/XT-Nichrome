@@ -2,9 +2,13 @@ package browser
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +18,8 @@ import (
 const (
 	maxConsoleEntries = 100
 	maxNetworkEntries = 100
+	maxDialogEntries  = 50
+	MaxPDFBytes       = 16 << 20
 )
 
 // Hover moves the virtual pointer along a minimum-jerk Bézier trajectory onto
@@ -645,13 +651,319 @@ func (p *Page) ClearCookies(ctx context.Context) *types.APIError {
 	return nil
 }
 
-// Telemetry returns a snapshot of the tab's console and network ring buffers.
+// Telemetry returns a snapshot of the tab's console, network, and dialog ring buffers.
 func (p *Page) Telemetry() types.TelemetryResult {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	con := append([]types.ConsoleEntry{}, p.consoleLog...)
 	net := append([]types.NetworkEntry{}, p.networkLog...)
-	return types.TelemetryResult{Console: con, Network: net}
+	dlg := append([]types.DialogEntry{}, p.dialogLog...)
+	return types.TelemetryResult{Console: con, Network: net, Dialogs: dlg}
+}
+
+func (p *Page) recordAndHandleDialog(params json.RawMessage) {
+	var ev struct {
+		Type          string `json:"type"`
+		Message       string `json:"message"`
+		DefaultPrompt string `json:"defaultPrompt"`
+	}
+	_ = json.Unmarshal(params, &ev)
+
+	p.mu.Lock()
+	accept := true
+	if p.dialogPolicySet {
+		accept = p.dialogNextAccept
+	}
+	promptText := p.dialogNextPrompt
+	entry := types.DialogEntry{
+		Type:          ev.Type,
+		Message:       ev.Message,
+		DefaultPrompt: ev.DefaultPrompt,
+		Accepted:      accept,
+		PromptText:    promptText,
+		Timestamp:     time.Now().UTC().Format(time.RFC3339),
+	}
+	p.dialogLog = append(p.dialogLog, entry)
+	if len(p.dialogLog) > maxDialogEntries {
+		p.dialogLog = p.dialogLog[len(p.dialogLog)-maxDialogEntries:]
+	}
+	p.mu.Unlock()
+
+	go func(acc bool, ptxt string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		args := map[string]any{"accept": acc}
+		if ptxt != "" {
+			args["promptText"] = ptxt
+		}
+		_ = p.proc.conn.Call(ctx, p.session, "Page.handleJavaScriptDialog", args, nil)
+	}(accept, promptText)
+}
+
+// Dialogs returns captured JavaScript dialogs and optionally updates the next
+// dialog handling policy (accept/dismiss and promptText).
+func (p *Page) Dialogs(req *types.DialogPolicyRequest) types.DialogsResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if req != nil {
+		if req.Accept != nil {
+			p.dialogPolicySet = true
+			p.dialogNextAccept = *req.Accept
+		}
+		if req.PromptText != "" || req.Accept != nil {
+			p.dialogNextPrompt = req.PromptText
+		}
+		if req.ClearLog {
+			p.dialogLog = nil
+		}
+	}
+	nextAcc := true
+	if p.dialogPolicySet {
+		nextAcc = p.dialogNextAccept
+	}
+	list := append([]types.DialogEntry{}, p.dialogLog...)
+	return types.DialogsResult{
+		NextAccept:     nextAcc,
+		NextPromptText: p.dialogNextPrompt,
+		Dialogs:        list,
+	}
+}
+
+// UploadFiles moves the humanized cursor onto an <input type="file"> element
+// and attaches local files via CDP DOM.setFileInputFiles.
+func (p *Page) UploadFiles(ctx context.Context, backendID int, objectID string, files []string) *types.APIError {
+	if len(files) == 0 {
+		return &types.APIError{
+			Code:    types.CodeInvalidRequest,
+			Message: "at least one file path is required for upload",
+			Detail:  map[string]any{"field": "files"},
+		}
+	}
+	resolved := make([]string, 0, len(files))
+	for _, f := range files {
+		clean := strings.TrimSpace(f)
+		if clean == "" {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "file path cannot be empty"}
+		}
+		abs, err := filepath.Abs(clean)
+		if err != nil {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "invalid file path: " + err.Error()}
+		}
+		st, err := os.Stat(abs)
+		if err != nil || st.IsDir() {
+			return &types.APIError{
+				Code:    types.CodeInvalidRequest,
+				Message: fmt.Sprintf("upload file %q does not exist or is a directory", clean),
+				Detail:  map[string]any{"file": clean},
+			}
+		}
+		resolved = append(resolved, abs)
+	}
+
+	if tx, ty, apiErr := p.humanPickPoint(ctx, objectID); apiErr == nil {
+		_ = p.humanMoveTo(ctx, tx, ty)
+	}
+
+	params := map[string]any{
+		"files": resolved,
+	}
+	if backendID > 0 {
+		params["backendNodeId"] = backendID
+	} else {
+		params["objectId"] = objectID
+	}
+	if err := p.Call(ctx, "DOM.setFileInputFiles", params, nil); err != nil {
+		return browserError(err)
+	}
+	// Dispatch synthetic input/change notifications if the browser didn't already.
+	_ = p.callOnObject(ctx, `(function(el){
+		if (!el) return true;
+		el.dispatchEvent(new Event("input", {bubbles:true}));
+		el.dispatchEvent(new Event("change", {bubbles:true}));
+		return true;
+	})`, objectID, nil)
+	return nil
+}
+
+// EvaluateUser runs a JavaScript expression in the page context (or invokes a
+// function on a resolved @eN DOM element when objectID is non-empty) and
+// returns its JSON-serializable result and JavaScript typeof.
+func (p *Page) EvaluateUser(ctx context.Context, expr string, objectID string) (*types.EvaluateResult, *types.APIError) {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return nil, &types.APIError{
+			Code:    types.CodeInvalidRequest,
+			Message: "expression is required",
+			Detail:  map[string]any{"field": "expression"},
+		}
+	}
+
+	var raw struct {
+		OK    bool   `json:"ok"`
+		Type  string `json:"type"`
+		Value any    `json:"value"`
+		Error string `json:"error"`
+	}
+
+	if objectID != "" {
+		fn := fmt.Sprintf(`(async function(el) {
+			try {
+				const userFn = (%s);
+				const val = (typeof userFn === "function") ? await userFn(el) : userFn;
+				return {ok: true, type: typeof val, value: val === undefined ? null : val};
+			} catch (err) {
+				return {ok: false, error: String(err && err.message ? err.message : err)};
+			}
+		})`, expr)
+		if apiErr := p.callOnObject(ctx, fn, objectID, &raw); apiErr != nil {
+			return nil, apiErr
+		}
+	} else {
+		wrapped := fmt.Sprintf(`(async () => {
+			try {
+				const val = await (%s);
+				return {ok: true, type: typeof val, value: val === undefined ? null : val};
+			} catch (err) {
+				return {ok: false, error: String(err && err.message ? err.message : err)};
+			}
+		})()`, expr)
+		if apiErr := p.Evaluate(ctx, wrapped, &raw); apiErr != nil {
+			return nil, apiErr
+		}
+	}
+
+	if !raw.OK {
+		return nil, &types.APIError{
+			Code:    types.CodeInvalidRequest,
+			Message: "evaluation error: " + firstLine(raw.Error),
+		}
+	}
+	return &types.EvaluateResult{
+		Value:      raw.Value,
+		Type:       raw.Type,
+		Generation: p.Generation(),
+		URL:        p.CurrentURL(),
+	}, nil
+}
+
+// PDF renders the current page to a PDF document via CDP Page.printToPDF.
+func (p *Page) PDF(ctx context.Context, req types.PDFRequest) ([]byte, *types.APIError) {
+	scale := req.Scale
+	if scale <= 0 {
+		scale = 1.0
+	}
+	if scale < 0.1 || scale > 2.0 {
+		return nil, &types.APIError{
+			Code:    types.CodeInvalidRequest,
+			Message: "scale must be between 0.1 and 2.0",
+			Detail:  map[string]any{"field": "scale"},
+		}
+	}
+	var res struct {
+		Data string `json:"data"`
+	}
+	err := p.Call(ctx, "Page.printToPDF", map[string]any{
+		"landscape":       req.Landscape,
+		"printBackground": req.PrintBackground,
+		"scale":           scale,
+	}, &res)
+	if err != nil {
+		var ae *types.APIError
+		if errors.As(err, &ae) {
+			return nil, ae
+		}
+		return nil, browserError(err)
+	}
+	raw, decErr := base64.StdEncoding.DecodeString(res.Data)
+	if decErr != nil {
+		return nil, &types.APIError{Code: types.CodeInternal, Message: "pdf was not valid base64"}
+	}
+	if len(raw) > MaxPDFBytes {
+		return nil, &types.APIError{
+			Code:    types.CodeInvalidRequest,
+			Message: fmt.Sprintf("pdf exceeds the %d byte budget", MaxPDFBytes),
+			Detail:  map[string]any{"bytes": len(raw)},
+		}
+	}
+	return raw, nil
+}
+
+// Storage inspects, seeds, or clears localStorage or sessionStorage on the
+// current document's origin.
+func (p *Page) Storage(ctx context.Context, req types.StorageRequest) (*types.StorageResult, *types.APIError) {
+	area := strings.ToLower(strings.TrimSpace(req.Area))
+	if area == "" {
+		area = "local"
+	}
+	if area != "local" && area != "session" {
+		return nil, &types.APIError{
+			Code:    types.CodeInvalidRequest,
+			Message: "area must be local or session",
+			Detail:  map[string]any{"field": "area"},
+		}
+	}
+	action := strings.ToLower(strings.TrimSpace(req.Action))
+	if action == "" {
+		action = "get"
+	}
+	if action != "get" && action != "set" && action != "clear" {
+		return nil, &types.APIError{
+			Code:    types.CodeInvalidRequest,
+			Message: "action must be get, set, or clear",
+			Detail:  map[string]any{"field": "action"},
+		}
+	}
+	entriesJSON, err := json.Marshal(req.Entries)
+	if err != nil {
+		return nil, &types.APIError{Code: types.CodeInternal, Message: err.Error()}
+	}
+	expr := fmt.Sprintf(`(() => {
+		const area = %q;
+		const act = %q;
+		const entries = %s || {};
+		try {
+			const store = area === "session" ? window.sessionStorage : window.localStorage;
+			if (act === "clear") {
+				store.clear();
+			} else if (act === "set") {
+				for (const [k, v] of Object.entries(entries)) {
+					store.setItem(String(k), String(v));
+				}
+			}
+			const out = {};
+			for (let i = 0; i < store.length; i++) {
+				const k = store.key(i);
+				if (k !== null) out[k] = store.getItem(k);
+			}
+			return {ok: true, origin: window.location.origin || "", entries: out};
+		} catch (e) {
+			return {ok: false, error: String(e && e.message ? e.message : e)};
+		}
+	})()`, area, action, string(entriesJSON))
+
+	var res struct {
+		OK      bool              `json:"ok"`
+		Origin  string            `json:"origin"`
+		Entries map[string]string `json:"entries"`
+		Error   string            `json:"error"`
+	}
+	if apiErr := p.Evaluate(ctx, expr, &res); apiErr != nil {
+		return nil, apiErr
+	}
+	if !res.OK {
+		return nil, &types.APIError{
+			Code:    types.CodeInvalidRequest,
+			Message: "storage access failed: " + res.Error,
+		}
+	}
+	if res.Entries == nil {
+		res.Entries = map[string]string{}
+	}
+	return &types.StorageResult{
+		Area:    area,
+		Origin:  res.Origin,
+		Entries: res.Entries,
+	}, nil
 }
 
 func (p *Page) recordConsoleEvent(params json.RawMessage) {

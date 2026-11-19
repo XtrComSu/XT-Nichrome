@@ -238,9 +238,10 @@ func dispatch(c *client, cmd string, args []string) error {
 		c.json = c.json || cf.json
 		return c.get(path)
 
-	case "close-tab", "persona", "screenshot", "go", "click", "fill",
-		"hover", "scroll", "press", "select", "check", "uncheck", "drag",
-		"back", "forward", "reload", "wait", "extract", "telemetry", "cookies":
+	case "close-tab", "persona", "screenshot", "pdf", "go", "click", "fill",
+		"hover", "scroll", "press", "select", "check", "uncheck", "drag", "upload",
+		"back", "forward", "reload", "wait", "extract", "telemetry", "cookies",
+		"eval", "storage", "dialogs":
 		cf, err := newCmd(cmd, args, cmdOpts{session: true, tab: true, wantArgs: true})
 		if err != nil {
 			return err
@@ -260,6 +261,31 @@ func dispatch(c *client, cmd string, args []string) error {
 			return c.get(base + "/extract")
 		case "telemetry":
 			return c.get(base + "/telemetry")
+		case "dialogs":
+			if len(rest) > 0 && (rest[0] == "accept" || rest[0] == "dismiss") {
+				acc := rest[0] == "accept"
+				body := map[string]any{"accept": acc}
+				if len(rest) > 1 {
+					body["promptText"] = rest[1]
+				}
+				return c.post(base+"/dialogs", body)
+			}
+			return c.get(base + "/dialogs")
+		case "storage":
+			if len(rest) > 0 && rest[0] == "clear" {
+				return c.delete(base + "/storage")
+			}
+			return c.get(base + "/storage")
+		case "eval":
+			if len(rest) == 1 {
+				return c.post(base+"/evaluate", map[string]any{"expression": rest[0]})
+			}
+			if len(rest) == 3 {
+				return c.post(base+"/evaluate", map[string]any{
+					"snapshotId": rest[0], "ref": rest[1], "expression": rest[2],
+				})
+			}
+			return errors.New("usage: eval -session S -tab T [SNAPSHOT_ID REF] EXPRESSION")
 		case "cookies":
 			if len(rest) > 0 && rest[0] == "clear" {
 				return c.delete(base + "/cookies")
@@ -271,6 +297,12 @@ func dispatch(c *client, cmd string, args []string) error {
 				out = rest[0]
 			}
 			return c.screenshot(base+"/screenshot", out)
+		case "pdf":
+			out := "page.pdf"
+			if len(rest) > 0 {
+				out = rest[0]
+			}
+			return c.screenshot(base+"/pdf", out)
 		case "go":
 			if len(rest) != 1 {
 				return errors.New("usage: go -session S -tab T URL")
@@ -325,6 +357,13 @@ func dispatch(c *client, cmd string, args []string) error {
 			return c.post(base+"/actions", map[string]any{
 				"kind": "drag", "snapshotId": rest[0], "ref": rest[1], "targetRef": rest[2],
 			})
+		case "upload":
+			if len(rest) < 3 {
+				return errors.New("usage: upload -session S -tab T SNAPSHOT_ID REF FILE [FILE...]")
+			}
+			return c.post(base+"/actions", map[string]any{
+				"kind": "upload", "snapshotId": rest[0], "ref": rest[1], "files": rest[2:],
+			})
 		case "scroll":
 			dir := "down"
 			amt := 480
@@ -369,6 +408,22 @@ func dispatch(c *client, cmd string, args []string) error {
 		return c.post("/v1/companion", map[string]any{
 			"action":  "guide",
 			"message": strings.Join(rest, " "),
+		})
+
+	case "companion-select":
+		cf, err := newCmd(cmd, args, cmdOpts{wantArgs: true})
+		if err != nil {
+			return err
+		}
+		c.json = c.json || cf.json
+		rest := cf.fs.Args()
+		if len(rest) == 0 {
+			return c.post("/v1/companion/selection", map[string]any{
+				"readPrimary": true,
+			})
+		}
+		return c.post("/v1/companion/selection", map[string]any{
+			"text": strings.Join(rest, " "),
 		})
 	}
 	usage()

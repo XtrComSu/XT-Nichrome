@@ -172,8 +172,14 @@ func TestToolRegistrationAndSchemas(t *testing.T) {
 		"browser_extract",
 		"browser_cookies",
 		"browser_telemetry",
+		"browser_evaluate",
+		"browser_pdf",
+		"browser_storage",
+		"browser_upload_file",
+		"browser_dialogs",
 		"companion_cursor_guide",
 		"companion_cursor_control",
+		"companion_analyze_selection",
 	}
 	got := make(map[string]*mcp.Tool, len(res.Tools))
 	for _, tool := range res.Tools {
@@ -424,6 +430,42 @@ func TestProtocolRoundTripWithRealBrowser(t *testing.T) {
 	}
 	if r := callTool("browser_telemetry", nil); r.IsError {
 		t.Fatalf("browser_telemetry failed: %+v", r.Content)
+	}
+
+	// 5c-2. browser_evaluate, browser_storage, browser_dialogs, browser_pdf, companion_analyze_selection
+	evalRes := callTool("browser_evaluate", map[string]any{
+		"ref":        nameRef,
+		"expression": "el => el.value",
+	})
+	if evalRes.IsError {
+		t.Fatalf("browser_evaluate failed: %+v", evalRes.Content)
+	}
+	if r := callTool("browser_storage", map[string]any{
+		"area":    "local",
+		"action":  "set",
+		"entries": map[string]string{"theme": "crimson", "element": "Ni-28"},
+	}); r.IsError {
+		t.Fatalf("browser_storage set failed: %+v", r.Content)
+	}
+	if r := callTool("browser_storage", map[string]any{"area": "local", "action": "get"}); r.IsError {
+		t.Fatalf("browser_storage get failed: %+v", r.Content)
+	}
+	if r := callTool("browser_dialogs", map[string]any{"accept": true, "promptText": "confirmed"}); r.IsError {
+		t.Fatalf("browser_dialogs failed: %+v", r.Content)
+	}
+	pdfPath := filepath.Join(t.TempDir(), "form.pdf")
+	if r := callTool("browser_pdf", map[string]any{"outputPath": pdfPath}); r.IsError {
+		t.Fatalf("browser_pdf failed: %+v", r.Content)
+	}
+	if st, err := os.Stat(pdfPath); err != nil || st.Size() < 100 {
+		t.Fatalf("browser_pdf did not write valid PDF file: err=%v", err)
+	}
+	if r := callTool("companion_analyze_selection", map[string]any{
+		"text":        "hey, this person isnt nice :(",
+		"windowClass": "discord",
+		"guide":       false,
+	}); r.IsError {
+		t.Fatalf("companion_analyze_selection failed: %+v", r.Content)
 	}
 
 	// 5d. companion_cursor_guide & companion_cursor_control (pointing at @eN with chat bubble!)

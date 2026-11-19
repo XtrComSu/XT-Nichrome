@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/base64"
+	"os"
 	"strings"
 	"time"
 
@@ -128,6 +130,74 @@ type CompanionControlInput struct {
 	FollowActions *bool  `json:"followActions,omitempty" jsonschema:"when true, the 2nd cursor automatically glides to and narrates every browser action"`
 }
 
+// EvaluateInput is the input for browser_evaluate.
+type EvaluateInput struct {
+	SessionID  string `json:"sessionId,omitempty" jsonschema:"session ID (defaults to active session)"`
+	TabID      string `json:"tabId,omitempty" jsonschema:"tab ID (defaults to active tab)"`
+	SnapshotID string `json:"snapshotId,omitempty" jsonschema:"optional snapshot ID when evaluating on an @eN element"`
+	Ref        string `json:"ref,omitempty" jsonschema:"optional @eN element reference; when set, expression can be a function (el => ...)"`
+	Expression string `json:"expression" jsonschema:"JavaScript expression or (el => ...) function to evaluate in the page context"`
+	TimeoutMS  int    `json:"timeoutMs,omitempty" jsonschema:"evaluation deadline in milliseconds (default 15000)"`
+}
+
+// PDFInput is the input for browser_pdf.
+type PDFInput struct {
+	SessionID       string  `json:"sessionId,omitempty" jsonschema:"session ID (defaults to active session)"`
+	TabID           string  `json:"tabId,omitempty" jsonschema:"tab ID (defaults to active tab)"`
+	Landscape       bool    `json:"landscape,omitempty" jsonschema:"render pages in landscape orientation"`
+	PrintBackground bool    `json:"printBackground,omitempty" jsonschema:"include CSS background graphics"`
+	Scale           float64 `json:"scale,omitempty" jsonschema:"page rendering scale between 0.1 and 2.0 (default 1.0)"`
+	OutputPath      string  `json:"outputPath,omitempty" jsonschema:"optional file path to write the rendered PDF bytes to"`
+}
+
+// PDFOutput is the output for browser_pdf.
+type PDFOutput struct {
+	SessionID  string `json:"sessionId" jsonschema:"session ID"`
+	TabID      string `json:"tabId" jsonschema:"tab ID"`
+	Bytes      int    `json:"bytes" jsonschema:"size of the rendered PDF in bytes"`
+	OutputPath string `json:"outputPath,omitempty" jsonschema:"file path where PDF was saved, if requested"`
+	DataBase64 string `json:"dataBase64,omitempty" jsonschema:"base64-encoded PDF when outputPath is omitted"`
+}
+
+// StorageInput is the input for browser_storage.
+type StorageInput struct {
+	SessionID string            `json:"sessionId,omitempty" jsonschema:"session ID (defaults to active session)"`
+	TabID     string            `json:"tabId,omitempty" jsonschema:"tab ID (defaults to active tab)"`
+	Area      string            `json:"area,omitempty" jsonschema:"storage area: local (default, localStorage) or session (sessionStorage)"`
+	Action    string            `json:"action,omitempty" jsonschema:"operation: get (default), set, or clear"`
+	Entries   map[string]string `json:"entries,omitempty" jsonschema:"key/value pairs to store when action is 'set'"`
+}
+
+// UploadFileInput is the input for browser_upload_file.
+type UploadFileInput struct {
+	SessionID  string   `json:"sessionId,omitempty" jsonschema:"session ID (defaults to active session)"`
+	TabID      string   `json:"tabId,omitempty" jsonschema:"tab ID (defaults to active tab)"`
+	SnapshotID string   `json:"snapshotId,omitempty" jsonschema:"snapshot ID from browser_snapshot (defaults to latest snapshot)"`
+	Ref        string   `json:"ref" jsonschema:"file input element @eN reference"`
+	Files      []string `json:"files" jsonschema:"local file paths to attach to the <input type='file'> element"`
+	TimeoutMS  int      `json:"timeoutMs,omitempty" jsonschema:"action deadline in milliseconds"`
+}
+
+// DialogsInput is the input for browser_dialogs.
+type DialogsInput struct {
+	SessionID  string `json:"sessionId,omitempty" jsonschema:"session ID (defaults to active session)"`
+	TabID      string `json:"tabId,omitempty" jsonschema:"tab ID (defaults to active tab)"`
+	Accept     *bool  `json:"accept,omitempty" jsonschema:"optional policy for the next JavaScript dialog: true to accept (default), false to dismiss"`
+	PromptText string `json:"promptText,omitempty" jsonschema:"optional prompt text to supply when accepting the next window.prompt() dialog"`
+	ClearLog   bool   `json:"clearLog,omitempty" jsonschema:"when true, clear the recorded dialog history"`
+}
+
+// CompanionSelectionInput is the input for companion_analyze_selection.
+type CompanionSelectionInput struct {
+	Text        string   `json:"text,omitempty" jsonschema:"highlighted/selected text to analyze (omit and set readPrimary=true to read live Wayland primary selection)"`
+	ReadPrimary bool     `json:"readPrimary,omitempty" jsonschema:"read the currently highlighted text from Wayland primary selection (wl-paste --primary)"`
+	WindowClass string   `json:"windowClass,omitempty" jsonschema:"optional active window class (e.g. discord, firefox, kitty)"`
+	WindowTitle string   `json:"windowTitle,omitempty" jsonschema:"optional active window title"`
+	Guide       bool     `json:"guide,omitempty" jsonschema:"when true, pop up the 2nd companion cursor ('Ni-Cursor') with the real-time reply"`
+	X           *float64 `json:"x,omitempty" jsonschema:"optional target X coordinate when guide=true"`
+	Y           *float64 `json:"y,omitempty" jsonschema:"optional target Y coordinate when guide=true"`
+}
+
 func (s *Server) registerExtendedTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "browser_hover",
@@ -198,8 +268,33 @@ func (s *Server) registerExtendedTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "browser_telemetry",
-		Description: "Return the ring-buffered console messages (console.log/warn/error, runtime exceptions) and network requests/responses observed on the active tab.",
+		Description: "Return the ring-buffered console messages (console.log/warn/error, runtime exceptions), network requests/responses, and JavaScript dialogs observed on the active tab.",
 	}, s.handleTelemetry)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "browser_evaluate",
+		Description: "Evaluate a JavaScript expression in the active tab (or pass ref='@eN' to invoke a function el => ... on a verified DOM element) and return its JSON value.",
+	}, s.handleEvaluate)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "browser_pdf",
+		Description: "Render the active tab to a PDF document via CDP Page.printToPDF and optionally save it to outputPath.",
+	}, s.handlePDF)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "browser_storage",
+		Description: "Inspect (action='get'), seed (action='set'), or clear (action='clear') localStorage (area='local') or sessionStorage (area='session') on the active tab.",
+	}, s.handleStorage)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "browser_upload_file",
+		Description: "Move the humanized cursor to an <input type='file'> element (@eN) and attach local file paths via CDP DOM.setFileInputFiles.",
+	}, s.handleUploadFile)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "browser_dialogs",
+		Description: "Inspect captured JavaScript alert/confirm/prompt/beforeunload dialogs on the tab, or configure how the next dialog should be handled (accept/dismiss and promptText).",
+	}, s.handleDialogs)
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "companion_cursor_guide",
@@ -212,6 +307,12 @@ func (s *Server) registerExtendedTools() {
 		Name:        "companion_cursor_control",
 		Description: "Show, hide, clear, or query the status of the Wayland/Hyprland & in-browser 2nd companion cursor, or toggle followActions auto-narration.",
 	}, s.handleCompanionControl)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name: "companion_analyze_selection",
+		Description: "Analyze highlighted/selected text (or read live Wayland primary selection via readPrimary=true) from Discord, browser, or terminal, " +
+			"classify tone/intent or decode base64/hex/timestamps, and optionally pop up Ni-Cursor with a real-time reply.",
+	}, s.handleCompanionSelection)
 }
 
 func (s *Server) handleHover(ctx context.Context, req *mcp.CallToolRequest, in HoverInput) (*mcp.CallToolResult, ActionOutput, error) {
@@ -496,4 +597,131 @@ func (s *Server) handleCompanionControl(ctx context.Context, req *mcp.CallToolRe
 		return nil, types.CompanionState{}, FormatError(apiErr)
 	}
 	return nil, *st, nil
+}
+
+func (s *Server) handleEvaluate(ctx context.Context, req *mcp.CallToolRequest, in EvaluateInput) (*mcp.CallToolResult, types.EvaluateResult, error) {
+	sid, tid, apiErr := s.resolveSessionAndTab(req, in.SessionID, in.TabID)
+	if apiErr != nil {
+		return nil, types.EvaluateResult{}, FormatError(apiErr)
+	}
+	ref := strings.TrimPrefix(strings.TrimSpace(in.Ref), "@")
+	snapID := in.SnapshotID
+	if ref != "" && snapID == "" {
+		snapID = s.resolveSnapshotID(req, tid, "")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	res, apiErr := s.cfg.Manager.Evaluate(ctx, sid, tid, types.EvaluateRequest{
+		Expression: in.Expression,
+		SnapshotID: snapID,
+		Ref:        ref,
+		TimeoutMS:  in.TimeoutMS,
+	})
+	if apiErr != nil {
+		return nil, types.EvaluateResult{}, FormatError(apiErr)
+	}
+	return nil, *res, nil
+}
+
+func (s *Server) handlePDF(ctx context.Context, req *mcp.CallToolRequest, in PDFInput) (*mcp.CallToolResult, PDFOutput, error) {
+	sid, tid, apiErr := s.resolveSessionAndTab(req, in.SessionID, in.TabID)
+	if apiErr != nil {
+		return nil, PDFOutput{}, FormatError(apiErr)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	pdf, apiErr := s.cfg.Manager.PDF(ctx, sid, tid, types.PDFRequest{
+		Landscape:       in.Landscape,
+		PrintBackground: in.PrintBackground,
+		Scale:           in.Scale,
+	})
+	if apiErr != nil {
+		return nil, PDFOutput{}, FormatError(apiErr)
+	}
+	out := PDFOutput{
+		SessionID: sid,
+		TabID:     tid,
+		Bytes:     len(pdf),
+	}
+	if in.OutputPath != "" {
+		if err := os.WriteFile(in.OutputPath, pdf, 0o600); err != nil {
+			return nil, PDFOutput{}, FormatError(&types.APIError{
+				Code:    types.CodeInvalidRequest,
+				Message: "could not write PDF file: " + err.Error(),
+			})
+		}
+		out.OutputPath = in.OutputPath
+	} else {
+		out.DataBase64 = base64.StdEncoding.EncodeToString(pdf)
+	}
+	return nil, out, nil
+}
+
+func (s *Server) handleStorage(ctx context.Context, req *mcp.CallToolRequest, in StorageInput) (*mcp.CallToolResult, types.StorageResult, error) {
+	sid, tid, apiErr := s.resolveSessionAndTab(req, in.SessionID, in.TabID)
+	if apiErr != nil {
+		return nil, types.StorageResult{}, FormatError(apiErr)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	res, apiErr := s.cfg.Manager.Storage(ctx, sid, tid, types.StorageRequest{
+		Area:    in.Area,
+		Action:  in.Action,
+		Entries: in.Entries,
+	})
+	if apiErr != nil {
+		return nil, types.StorageResult{}, FormatError(apiErr)
+	}
+	return nil, *res, nil
+}
+
+func (s *Server) handleUploadFile(ctx context.Context, req *mcp.CallToolRequest, in UploadFileInput) (*mcp.CallToolResult, ActionOutput, error) {
+	sid, tid, apiErr := s.resolveSessionAndTab(req, in.SessionID, in.TabID)
+	if apiErr != nil {
+		return nil, ActionOutput{}, FormatError(apiErr)
+	}
+	snapID := s.resolveSnapshotID(req, tid, in.SnapshotID)
+	return s.execAction(ctx, sid, tid, types.ActionRequest{
+		Kind:       types.ActionUpload,
+		SnapshotID: snapID,
+		Ref:        strings.TrimPrefix(strings.TrimSpace(in.Ref), "@"),
+		Files:      in.Files,
+		TimeoutMS:  in.TimeoutMS,
+	})
+}
+
+func (s *Server) handleDialogs(ctx context.Context, req *mcp.CallToolRequest, in DialogsInput) (*mcp.CallToolResult, types.DialogsResult, error) {
+	sid, tid, apiErr := s.resolveSessionAndTab(req, in.SessionID, in.TabID)
+	if apiErr != nil {
+		return nil, types.DialogsResult{}, FormatError(apiErr)
+	}
+	var pol *types.DialogPolicyRequest
+	if in.Accept != nil || in.PromptText != "" || in.ClearLog {
+		pol = &types.DialogPolicyRequest{
+			Accept:     in.Accept,
+			PromptText: in.PromptText,
+			ClearLog:   in.ClearLog,
+		}
+	}
+	res, apiErr := s.cfg.Manager.Dialogs(ctx, sid, tid, pol)
+	if apiErr != nil {
+		return nil, types.DialogsResult{}, FormatError(apiErr)
+	}
+	return nil, *res, nil
+}
+
+func (s *Server) handleCompanionSelection(ctx context.Context, _ *mcp.CallToolRequest, in CompanionSelectionInput) (*mcp.CallToolResult, types.SelectionAnalysis, error) {
+	res, apiErr := s.cfg.Manager.CompanionSelection(ctx, types.SelectionRequest{
+		Text:        in.Text,
+		ReadPrimary: in.ReadPrimary,
+		WindowClass: in.WindowClass,
+		WindowTitle: in.WindowTitle,
+		Guide:       in.Guide,
+		X:           in.X,
+		Y:           in.Y,
+	})
+	if apiErr != nil {
+		return nil, types.SelectionAnalysis{}, FormatError(apiErr)
+	}
+	return nil, *res, nil
 }

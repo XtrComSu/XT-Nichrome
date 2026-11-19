@@ -25,16 +25,18 @@ import (
 
 func main() {
 	var (
-		x          = flag.Float64("x", 680, "target screen X coordinate")
-		y          = flag.Float64("y", 420, "target screen Y coordinate")
-		say        = flag.String("say", "hey, you should click this to help me!", "chat bubble message")
-		subtext    = flag.String("subtext", "Ni-28 assistant", "small guiding text near the cursor")
-		mood       = flag.String("mood", "friendly", "companion mood: friendly|curious|warn|sad|excited|thinking")
-		pulse      = flag.Bool("pulse", true, "render expanding crimson pulse ring at cursor tip")
-		demo       = flag.Bool("demo", false, "run an interactive multi-step tour across the screen")
-		listen     = flag.String("listen", "", "run as a live HTTP daemon (e.g. 127.0.0.1:7798) keeping the overlay open")
-		followUser = flag.Bool("follow-user", false, "gently shadow the user's Hyprland cursor and active window when not pinned")
-		duration   = flag.Duration("duration", 5*time.Second, "how long to keep the overlay visible (0 = until Ctrl+C)")
+		x              = flag.Float64("x", 680, "target screen X coordinate")
+		y              = flag.Float64("y", 420, "target screen Y coordinate")
+		say            = flag.String("say", "hey, you should click this to help me!", "chat bubble message")
+		subtext        = flag.String("subtext", "Ni-28 assistant", "small guiding text near the cursor")
+		mood           = flag.String("mood", "friendly", "companion mood: friendly|curious|warn|sad|excited|thinking")
+		pulse          = flag.Bool("pulse", true, "render expanding crimson pulse ring at cursor tip")
+		demo           = flag.Bool("demo", false, "run an interactive multi-step tour across the screen")
+		listen         = flag.String("listen", "", "run as a live HTTP daemon (e.g. 127.0.0.1:7798) keeping the overlay open")
+		followUser     = flag.Bool("follow-user", false, "gently shadow the user's Hyprland cursor and active window when not pinned")
+		watchSelection = flag.Bool("watch-selection", false, "activate automatically when the user highlights/selects text on Wayland and reply in real time")
+		autoHide       = flag.Duration("auto-hide", 6*time.Second, "auto-hide the overlay after selection reply when follow-user is false (0 disables)")
+		duration       = flag.Duration("duration", 5*time.Second, "how long to keep the overlay visible (0 = until Ctrl+C)")
 	)
 	flag.Parse()
 
@@ -45,7 +47,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	if *listen != "" {
-		runDaemon(ctrl, *listen, *followUser, *x, *y, *mood, *subtext, *say, *pulse, sigCh)
+		runDaemon(ctrl, *listen, *followUser, *watchSelection, *autoHide, *x, *y, *mood, *subtext, *say, *pulse, sigCh)
 		return
 	}
 
@@ -115,31 +117,45 @@ func main() {
 	}
 }
 
-func runDaemon(ctrl *companion.Controller, addr string, followInitial bool, initX, initY float64, mood, subtext, say string, pulse bool, sigCh <-chan os.Signal) {
+func runDaemon(ctrl *companion.Controller, addr string, followInitial, watchSelInitial bool, autoHide time.Duration, initX, initY float64, mood, subtext, say string, pulse bool, sigCh <-chan os.Signal) {
 	_ = os.Setenv("XT_NICHROME_CURSOR_DAEMON", "1")
 	var (
-		mu         sync.Mutex
-		followUser = followInitial
-		pinUntil   = time.Now().Add(6 * time.Second)
-		msgUntil   = time.Now().Add(6 * time.Second)
-		lastWinKey string
+		mu             sync.Mutex
+		followUser     = followInitial
+		watchSelection = watchSelInitial
+		pinUntil       = time.Now().Add(6 * time.Second)
+		msgUntil       = time.Now().Add(6 * time.Second)
+		hideAfter      time.Time
+		lastWinKey     string
+		lastSelection  string
 	)
 
-	_, _ = ctrl.Apply(types.CompanionRequest{
-		Action:  "guide",
-		X:       &initX,
-		Y:       &initY,
-		Mood:    mood,
-		Subtext: subtext,
-		Message: say,
-		Pulse:   &pulse,
-	})
+	// Seed lastSelection with whatever is already in primary selection at launch
+	// so we only trigger when the user highlights NEW text.
+	if initSel, err := companion.ReadPrimarySelection(); err == nil {
+		lastSelection = initSel
+	}
+
+	if followInitial || !watchSelInitial {
+		_, _ = ctrl.Apply(types.CompanionRequest{
+			Action:  "guide",
+			X:       &initX,
+			Y:       &initY,
+			Mood:    mood,
+			Subtext: subtext,
+			Message: say,
+			Pulse:   &pulse,
+		})
+		if autoHide > 0 && !followInitial {
+			hideAfter = time.Now().Add(autoHide)
+		}
+	}
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 
 	go func() {
-		ticker := time.NewTicker(450 * time.Millisecond)
+		ticker := time.NewTicker(350 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
@@ -148,10 +164,59 @@ func runDaemon(ctrl *companion.Controller, addr string, followInitial bool, init
 			case <-ticker.C:
 				now := time.Now()
 				mu.Lock()
+				doWatchSel := watchSelection
+				prevSel := lastSelection
+				mu.Unlock()
+
+				if doWatchSel {
+					if sel, err := companion.ReadPrimarySelection(); err == nil && sel != "" && sel != prevSel && len([]rune(sel)) >= 2 {
+						cx, cy, ok := readHyprCursor()
+						winClass, winTitle := readHyprActiveWindow()
+						var tx, ty *float64
+						if ok {
+							px := math.Max(40, math.Min(1860, cx+40))
+							py := math.Max(40, math.Min(1020, cy-36))
+							tx, ty = &px, &py
+						}
+						if _, apiErr := ctrl.HandleSelection(types.SelectionRequest{
+							Text:        sel,
+							WindowClass: winClass,
+							WindowTitle: winTitle,
+							Guide:       true,
+							X:           tx,
+							Y:           ty,
+						}); apiErr == nil {
+							hold := autoHide
+							if hold <= 0 {
+								hold = 6 * time.Second
+							}
+							mu.Lock()
+							lastSelection = sel
+							pinUntil = now.Add(hold)
+							msgUntil = now.Add(hold)
+							if !followUser && autoHide > 0 {
+								hideAfter = now.Add(hold)
+							}
+							mu.Unlock()
+							continue
+						}
+					}
+				}
+
+				mu.Lock()
+				shouldHide := !followUser && !hideAfter.IsZero() && now.After(hideAfter)
+				if shouldHide {
+					hideAfter = time.Time{}
+				}
 				doFollow := followUser && now.After(pinUntil)
 				clearMsg := followUser && now.After(msgUntil)
 				prevKey := lastWinKey
 				mu.Unlock()
+
+				if shouldHide && ctrl.State().Visible {
+					_, _ = ctrl.Apply(types.CompanionRequest{Action: "hide"})
+					continue
+				}
 				if !doFollow {
 					continue
 				}
@@ -198,8 +263,9 @@ func runDaemon(ctrl *companion.Controller, addr string, followInitial bool, init
 	handleUpdate := func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			types.CompanionRequest
-			FollowUser *bool `json:"followUser,omitempty"`
-			PinSeconds int   `json:"pinSeconds,omitempty"`
+			FollowUser     *bool `json:"followUser,omitempty"`
+			WatchSelection *bool `json:"watchSelection,omitempty"`
+			PinSeconds     int   `json:"pinSeconds,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -210,12 +276,18 @@ func runDaemon(ctrl *companion.Controller, addr string, followInitial bool, init
 		if body.FollowUser != nil {
 			followUser = *body.FollowUser
 		}
+		if body.WatchSelection != nil {
+			watchSelection = *body.WatchSelection
+		}
 		pinSec := body.PinSeconds
 		if pinSec <= 0 {
 			pinSec = 8
 		}
 		pinUntil = now.Add(time.Duration(pinSec) * time.Second)
 		msgUntil = now.Add(time.Duration(pinSec) * time.Second)
+		if !followUser && autoHide > 0 {
+			hideAfter = now.Add(time.Duration(pinSec) * time.Second)
+		}
 		mu.Unlock()
 		st, apiErr := ctrl.Apply(body.CompanionRequest)
 		if apiErr != nil {
@@ -224,6 +296,42 @@ func runDaemon(ctrl *companion.Controller, addr string, followInitial bool, init
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(st)
+	}
+
+	handleSelection := func(w http.ResponseWriter, r *http.Request) {
+		var req types.SelectionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.WindowClass == "" && req.WindowTitle == "" {
+			req.WindowClass, req.WindowTitle = readHyprActiveWindow()
+		}
+		if req.Guide && req.X == nil && req.Y == nil {
+			if cx, cy, ok := readHyprCursor(); ok {
+				px := math.Max(40, math.Min(1860, cx+40))
+				py := math.Max(40, math.Min(1020, cy-36))
+				req.X, req.Y = &px, &py
+			}
+		}
+		res, apiErr := ctrl.HandleSelection(req)
+		if apiErr != nil {
+			http.Error(w, apiErr.Error(), types.Status(apiErr.Code))
+			return
+		}
+		if req.Guide {
+			now := time.Now()
+			mu.Lock()
+			lastSelection = res.Text
+			pinUntil = now.Add(6 * time.Second)
+			msgUntil = now.Add(6 * time.Second)
+			if !followUser && autoHide > 0 {
+				hideAfter = now.Add(autoHide)
+			}
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(res)
 	}
 
 	mux := http.NewServeMux()
@@ -237,6 +345,7 @@ func runDaemon(ctrl *companion.Controller, addr string, followInitial bool, init
 	})
 	mux.HandleFunc("POST /guide", handleUpdate)
 	mux.HandleFunc("POST /overlay", handleUpdate)
+	mux.HandleFunc("POST /selection", handleSelection)
 
 	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {

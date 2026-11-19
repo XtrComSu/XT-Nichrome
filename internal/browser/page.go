@@ -45,11 +45,15 @@ type Page struct {
 	// inflight tracks a dispatched side-effecting action so a client disconnect
 	// cannot turn into a duplicate submission.
 	inflight   bool
-	cursorX    float64
-	cursorY    float64
-	cursorInit bool
-	consoleLog []types.ConsoleEntry
-	networkLog []types.NetworkEntry
+	cursorX          float64
+	cursorY          float64
+	cursorInit       bool
+	consoleLog       []types.ConsoleEntry
+	networkLog       []types.NetworkEntry
+	dialogLog        []types.DialogEntry
+	dialogPolicySet  bool
+	dialogNextAccept bool
+	dialogNextPrompt string
 
 	events chan struct{}
 	done   chan struct{}
@@ -272,16 +276,9 @@ func (p *Page) handleEvent(method string, params json.RawMessage) {
 	case "Page.loadEventFired":
 		p.signal()
 	case "Page.javascriptDialogOpening":
-		// Auto-accept, then report. A dialog blocks the renderer; leaving it open
-		// would hang every later command.
-		var ev struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		}
-		_ = json.Unmarshal(params, &ev)
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_ = p.proc.conn.Call(ctx, p.session, "Page.handleJavaScriptDialog", map[string]any{"accept": true}, nil)
-		cancel()
+		// Handle immediately according to configured dialog policy (default: accept=true)
+		// and record in dialogLog so telemetry/dialogs tools can inspect it.
+		p.recordAndHandleDialog(params)
 		p.signal()
 	case "Page.windowOpen":
 		// Popups are disabled: report and refuse. The browser-scope handler also

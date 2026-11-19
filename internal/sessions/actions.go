@@ -115,6 +115,13 @@ func (m *Manager) Act(ctx context.Context, sessionID, tabID string, req types.Ac
 	case types.ActionDrag:
 		dispatched = true
 		actErr = t.page.Drag(actx, objectID, dstObjectID)
+	case types.ActionUpload:
+		dispatched = true
+		var backendID int
+		if ref != nil {
+			backendID = ref.BackendID
+		}
+		actErr = t.page.UploadFiles(actx, backendID, objectID, req.Files)
 	}
 	t.page.MarkInflight(false)
 	t.page.TouchActivity()
@@ -245,6 +252,7 @@ var supportedActions = []string{
 	types.ActionCheck,
 	types.ActionUncheck,
 	types.ActionDrag,
+	types.ActionUpload,
 }
 
 func validateAction(req types.ActionRequest) *types.APIError {
@@ -317,6 +325,10 @@ func validateAction(req types.ActionRequest) *types.APIError {
 	case types.ActionDrag:
 		if req.TargetRef == "" {
 			return &types.APIError{Code: types.CodeInvalidRequest, Message: "targetRef is required for drag", Detail: map[string]any{"field": "targetRef"}}
+		}
+	case types.ActionUpload:
+		if len(req.Files) == 0 {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "files is required for upload", Detail: map[string]any{"field": "files"}}
 		}
 	}
 	if req.TimeoutMS < 0 || req.TimeoutMS > 120000 {
@@ -622,6 +634,114 @@ func (m *Manager) Companion(ctx context.Context, req types.CompanionRequest) (*t
 // CompanionController exposes the underlying companion controller.
 func (m *Manager) CompanionController() any {
 	return m.companion
+}
+
+// CompanionSelection analyzes highlighted text and optionally guides the
+// companion cursor with a real-time contextual reply.
+func (m *Manager) CompanionSelection(ctx context.Context, req types.SelectionRequest) (*types.SelectionAnalysis, *types.APIError) {
+	if m.companion == nil {
+		return nil, &types.APIError{Code: types.CodeInternal, Message: "companion controller not initialised"}
+	}
+	return m.companion.HandleSelection(req)
+}
+
+// Evaluate runs a JavaScript expression in the page context (or against a
+// resolved @eN element when req.Ref is non-empty).
+func (m *Manager) Evaluate(ctx context.Context, sessionID, tabID string, req types.EvaluateRequest) (*types.EvaluateResult, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	leave, apiErr := t.enter(ctx, m.cfg.Limits)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	defer leave()
+
+	timeout := time.Duration(req.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	ectx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var objectID string
+	if strings.TrimSpace(req.Ref) != "" {
+		snapID := req.SnapshotID
+		if snapID == "" {
+			if cur := t.snapshots.Current(tabID); cur != nil {
+				snapID = cur.ID
+			}
+		}
+		ref, apiErr := snapshots.Resolve(t.snapshots, tabID, t.page, snapID, strings.TrimPrefix(strings.TrimSpace(req.Ref), "@"), 0)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		objectID, apiErr = t.page.ResolveBackendNode(ectx, ref.BackendID)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		defer t.page.ReleaseObject(context.Background(), objectID)
+	}
+
+	res, apiErr := t.page.EvaluateUser(ectx, req.Expression, objectID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	s.touch(m.cfg.Now())
+	return res, nil
+}
+
+// PDF renders the current tab to a PDF document.
+func (m *Manager) PDF(ctx context.Context, sessionID, tabID string, req types.PDFRequest) ([]byte, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	leave, apiErr := t.enter(ctx, m.cfg.Limits)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	defer leave()
+
+	pdf, apiErr := t.page.PDF(ctx, req)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	s.touch(m.cfg.Now())
+	return pdf, nil
+}
+
+// Storage inspects, seeds, or clears localStorage/sessionStorage on a tab.
+func (m *Manager) Storage(ctx context.Context, sessionID, tabID string, req types.StorageRequest) (*types.StorageResult, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	leave, apiErr := t.enter(ctx, m.cfg.Limits)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	defer leave()
+
+	res, apiErr := t.page.Storage(ctx, req)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	s.touch(m.cfg.Now())
+	return res, nil
+}
+
+// Dialogs returns captured JavaScript dialogs on a tab and optionally updates
+// how the next dialog will be handled.
+func (m *Manager) Dialogs(ctx context.Context, sessionID, tabID string, req *types.DialogPolicyRequest) (*types.DialogsResult, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	out := t.page.Dialogs(req)
+	s.touch(m.cfg.Now())
+	return &out, nil
 }
 
 // ensure referenced symbols stay imported

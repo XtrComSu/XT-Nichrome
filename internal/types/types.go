@@ -272,10 +272,103 @@ type NetworkEntry struct {
 	Timestamp    string `json:"timestamp"`
 }
 
+// DialogEntry is one captured JavaScript dialog (alert, confirm, prompt, beforeunload).
+type DialogEntry struct {
+	Type          string `json:"type"`
+	Message       string `json:"message"`
+	DefaultPrompt string `json:"defaultPrompt,omitempty"`
+	Accepted      bool   `json:"accepted"`
+	PromptText    string `json:"promptText,omitempty"`
+	Timestamp     string `json:"timestamp"`
+}
+
+// DialogPolicyRequest configures how the next JavaScript dialog on a tab should be handled.
+type DialogPolicyRequest struct {
+	Accept     *bool  `json:"accept,omitempty"`
+	PromptText string `json:"promptText,omitempty"`
+	ClearLog   bool   `json:"clearLog,omitempty"`
+}
+
+// DialogsResult is GET/POST .../dialogs.
+type DialogsResult struct {
+	NextAccept     bool          `json:"nextAccept"`
+	NextPromptText string        `json:"nextPromptText,omitempty"`
+	Dialogs        []DialogEntry `json:"dialogs"`
+}
+
+// EvaluateRequest is POST .../evaluate.
+type EvaluateRequest struct {
+	Expression string `json:"expression"`
+	SnapshotID string `json:"snapshotId,omitempty"`
+	Ref        string `json:"ref,omitempty"`
+	TimeoutMS  int    `json:"timeoutMs,omitempty"`
+}
+
+// EvaluateResult is the response from POST .../evaluate.
+type EvaluateResult struct {
+	Value      any    `json:"value"`
+	Type       string `json:"type"`
+	Generation int64  `json:"generation"`
+	URL        string `json:"url,omitempty"`
+}
+
+// PDFRequest is the optional configuration for GET/POST .../pdf.
+type PDFRequest struct {
+	Landscape       bool    `json:"landscape,omitempty"`
+	PrintBackground bool    `json:"printBackground,omitempty"`
+	Scale           float64 `json:"scale,omitempty"`
+}
+
+// StorageRequest is POST .../storage.
+type StorageRequest struct {
+	// Area is "local" (default, localStorage) or "session" (sessionStorage).
+	Area string `json:"area,omitempty"`
+	// Action is "get" (default), "set", or "clear".
+	Action  string            `json:"action,omitempty"`
+	Entries map[string]string `json:"entries,omitempty"`
+}
+
+// StorageResult is GET/POST .../storage.
+type StorageResult struct {
+	Area    string            `json:"area"`
+	Origin  string            `json:"origin"`
+	Entries map[string]string `json:"entries"`
+}
+
+// SelectionRequest analyzes highlighted/selected text (or reads Wayland primary selection)
+// and optionally activates the 2nd companion cursor ("Ni-Cursor") with a real-time reply.
+type SelectionRequest struct {
+	Text        string   `json:"text,omitempty"`
+	ReadPrimary bool     `json:"readPrimary,omitempty"`
+	WindowClass string   `json:"windowClass,omitempty"`
+	WindowTitle string   `json:"windowTitle,omitempty"`
+	Guide       bool     `json:"guide,omitempty"`
+	X           *float64 `json:"x,omitempty"`
+	Y           *float64 `json:"y,omitempty"`
+}
+
+// SelectionAnalysis is the real-time companion reaction to highlighted text.
+type SelectionAnalysis struct {
+	Text           string  `json:"text"`
+	Category       string  `json:"category"`
+	Mood           string  `json:"mood"`
+	Subtext        string  `json:"subtext"`
+	Reply          string  `json:"reply"`
+	SuggestedReply string  `json:"suggestedReply,omitempty"`
+	Decoded        string  `json:"decoded,omitempty"`
+	WindowClass    string  `json:"windowClass,omitempty"`
+	WindowTitle    string  `json:"windowTitle,omitempty"`
+	Guided         bool    `json:"guided,omitempty"`
+	X              float64 `json:"x,omitempty"`
+	Y              float64 `json:"y,omitempty"`
+	Timestamp      string  `json:"timestamp"`
+}
+
 // TelemetryResult is GET .../telemetry.
 type TelemetryResult struct {
 	Console []ConsoleEntry `json:"console"`
 	Network []NetworkEntry `json:"network"`
+	Dialogs []DialogEntry  `json:"dialogs,omitempty"`
 }
 
 // CompanionRequest updates or queries the 2nd companion cursor ("Ni-Cursor")
@@ -308,22 +401,23 @@ type CompanionRequest struct {
 
 // CompanionState describes the live state of the 2nd companion cursor.
 type CompanionState struct {
-	Visible        bool    `json:"visible"`
-	WaylandActive  bool    `json:"waylandActive"`
-	WaylandDisplay string  `json:"waylandDisplay,omitempty"`
-	HyprlandActive bool    `json:"hyprlandActive"`
-	Monitor        string  `json:"monitor,omitempty"`
-	ScreenWidth    int     `json:"screenWidth"`
-	ScreenHeight   int     `json:"screenHeight"`
-	X              float64 `json:"x"`
-	Y              float64 `json:"y"`
-	Message        string  `json:"message,omitempty"`
-	Subtext        string  `json:"subtext,omitempty"`
-	Mood           string  `json:"mood"`
-	Pulse          bool    `json:"pulse"`
-	FollowActions  bool    `json:"followActions"`
-	TargetRef      string  `json:"targetRef,omitempty"`
-	UpdatedAt      string  `json:"updatedAt"`
+	Visible        bool               `json:"visible"`
+	WaylandActive  bool               `json:"waylandActive"`
+	WaylandDisplay string             `json:"waylandDisplay,omitempty"`
+	HyprlandActive bool               `json:"hyprlandActive"`
+	Monitor        string             `json:"monitor,omitempty"`
+	ScreenWidth    int                `json:"screenWidth"`
+	ScreenHeight   int                `json:"screenHeight"`
+	X              float64            `json:"x"`
+	Y              float64            `json:"y"`
+	Message        string             `json:"message,omitempty"`
+	Subtext        string             `json:"subtext,omitempty"`
+	Mood           string             `json:"mood"`
+	Pulse          bool               `json:"pulse"`
+	FollowActions  bool               `json:"followActions"`
+	TargetRef      string             `json:"targetRef,omitempty"`
+	LastSelection  *SelectionAnalysis `json:"lastSelection,omitempty"`
+	UpdatedAt      string             `json:"updatedAt"`
 }
 
 // SnapshotRequest is the query for GET .../snapshot.
@@ -363,6 +457,7 @@ const (
 	ActionCheck   = "check"
 	ActionUncheck = "uncheck"
 	ActionDrag    = "drag"
+	ActionUpload  = "upload"
 )
 
 // ActionRequest is POST .../actions. Kind is the discriminator; fields for
@@ -381,6 +476,8 @@ type ActionRequest struct {
 	// Fill-only or Select-only text/value.
 	Text  string `json:"text,omitempty"`
 	Value string `json:"value,omitempty"`
+	// Upload-only: local file paths to attach to an <input type="file"> element.
+	Files []string `json:"files,omitempty"`
 	// Click-only.
 	Button     string `json:"button,omitempty"` // left|right|middle
 	ClickCount int    `json:"clickCount,omitempty"`
