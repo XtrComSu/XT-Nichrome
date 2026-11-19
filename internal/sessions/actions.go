@@ -3,6 +3,8 @@ package sessions
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/xtrcom/xt-nichrome/internal/browser"
@@ -10,18 +12,13 @@ import (
 	"github.com/xtrcom/xt-nichrome/internal/types"
 )
 
-// Act performs a ref-based action on a tab.
+// Act performs a ref-based or viewport-level action on a tab.
 //
-// The hard part is not the click. It is deciding, when something goes wrong
-// halfway, whether the page changed. Three outcomes are distinguishable:
-//
+// Three outcomes are distinguishable:
 //   - the action never reached the page  -> safe to report failure, retry is safe
 //   - the dispatch completed             -> report completed
 //   - the dispatch was sent but its result was lost (timeout, client gone,
 //     renderer crash) -> report ACTION_OUTCOME_UNKNOWN and refuse to retry
-//
-// Reporting "failed" in the third case is the bug that makes agents double-submit
-// a payment form, so the code path is explicit rather than inferred.
 func (m *Manager) Act(ctx context.Context, sessionID, tabID string, req types.ActionRequest) (*types.ActionResult, *types.APIError) {
 	s, t, apiErr := m.lookup(sessionID, tabID)
 	if apiErr != nil {
@@ -36,14 +33,6 @@ func (m *Manager) Act(ctx context.Context, sessionID, tabID string, req types.Ac
 	}
 	defer leave()
 
-	ref, apiErr := snapshots.Resolve(t.snapshots, tabID, t.page, req.SnapshotID, req.Ref, req.Generation)
-	if apiErr != nil {
-		return nil, apiErr
-	}
-	if apiErr := checkActionable(req.Kind, ref); apiErr != nil {
-		return nil, apiErr
-	}
-
 	timeout := time.Duration(req.TimeoutMS) * time.Millisecond
 	if timeout <= 0 {
 		timeout = 15 * time.Second
@@ -51,38 +40,42 @@ func (m *Manager) Act(ctx context.Context, sessionID, tabID string, req types.Ac
 	actx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	objectID, apiErr := t.page.ResolveBackendNode(actx, ref.BackendID)
-	if apiErr != nil {
-		return nil, apiErr
-	}
-	defer t.page.ReleaseObject(context.Background(), objectID)
+	var (
+		ref         *snapshots.Ref
+		objectID    string
+		dstObjectID string
+	)
 
-	// Identity revalidation: a snapshot reference identifies one node, not a
-	// role/name pair. If the node was swapped for an identically labelled one,
-	// the signature changes and the action must not proceed.
-	fp, apiErr := t.page.Fingerprint(actx, objectID)
-	if apiErr != nil {
-		return nil, apiErr
-	}
-	if !fp.Connected {
-		return nil, &types.APIError{Code: types.CodeStaleRef, Message: "the referenced element has been removed from the document"}
-	}
-	if ref.Signature != "" && fp.Signature != ref.Signature {
-		return nil, &types.APIError{
-			Code:    types.CodeStaleRef,
-			Message: "the referenced element was replaced by a different node; take a fresh snapshot",
-			Detail:  map[string]any{"ref": req.Ref},
+	// Scroll and Press allow omitting Ref to operate at the viewport/document level.
+	if req.Ref != "" {
+		ref, apiErr = snapshots.Resolve(t.snapshots, tabID, t.page, req.SnapshotID, req.Ref, req.Generation)
+		if apiErr != nil {
+			return nil, apiErr
 		}
+		if apiErr := checkActionable(req.Kind, ref); apiErr != nil {
+			return nil, apiErr
+		}
+		objectID, apiErr = m.resolveAndVerifyNode(actx, t, ref, req.Ref, timeout)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		defer t.page.ReleaseObject(context.Background(), objectID)
 	}
 
-	if apiErr := t.page.WaitForActionability(actx, objectID, timeout); apiErr != nil {
-		return nil, apiErr
+	if req.Kind == types.ActionDrag {
+		dstRef, apiErr := snapshots.Resolve(t.snapshots, tabID, t.page, req.SnapshotID, req.TargetRef, req.Generation)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		dstObjectID, apiErr = m.resolveAndVerifyNode(actx, t, dstRef, req.TargetRef, timeout)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		defer t.page.ReleaseObject(context.Background(), dstObjectID)
 	}
 
 	genBefore := t.page.Generation()
 
-	// From here on the page may change. Mark the tab as having a dispatched
-	// side effect until we know its result.
 	t.page.MarkInflight(true)
 	dispatched := false
 	var actErr *types.APIError
@@ -97,27 +90,57 @@ func (m *Manager) Act(ctx context.Context, sessionID, tabID string, req types.Ac
 		}
 		dispatched = true
 		actErr = t.page.Fill(actx, objectID, req.Text, clear)
+	case types.ActionHover:
+		dispatched = true
+		actErr = t.page.Hover(actx, objectID)
+	case types.ActionScroll:
+		dispatched = true
+		actErr = t.page.Scroll(actx, objectID, req.Direction, req.Amount)
+	case types.ActionPress:
+		dispatched = true
+		actErr = t.page.PressKey(actx, objectID, req.Key)
+	case types.ActionSelect:
+		val := req.Value
+		if val == "" {
+			val = req.Text
+		}
+		dispatched = true
+		actErr = t.page.SelectOption(actx, objectID, val)
+	case types.ActionCheck:
+		dispatched = true
+		actErr = t.page.SetChecked(actx, objectID, true)
+	case types.ActionUncheck:
+		dispatched = true
+		actErr = t.page.SetChecked(actx, objectID, false)
+	case types.ActionDrag:
+		dispatched = true
+		actErr = t.page.Drag(actx, objectID, dstObjectID)
 	}
 	t.page.MarkInflight(false)
 	t.page.TouchActivity()
 	s.touch(m.cfg.Now())
 
-	// An action that submits a form usually navigates a moment later. Reporting
-	// "no fresh snapshot needed" and then having the refs die on the next call
-	// is the failure mode that makes an agent retry a click it already made, so
-	// wait out a short settle window before deciding.
-	// A click that triggers a load shows up as a pending navigation within a few
-	// milliseconds. Waiting a fixed window on every action would add that window
-	// to every non-navigating click, which is most of them.
+	// Update the 2nd companion cursor if it is currently visible and following actions.
+	if actErr == nil && m.companion != nil {
+		var cx, cy float64
+		if objectID != "" {
+			cx, cy, _ = t.page.ElementCenter(actx, objectID)
+		}
+		label := ""
+		if ref != nil && ref.Name != "" {
+			label = fmt.Sprintf("%s %q", req.Kind, ref.Name)
+		}
+		if st, ok := m.companion.NotifyAction(cx, cy, req.Ref, req.Kind, label); ok {
+			_ = t.page.RenderCompanionOverlay(actx, st)
+		}
+	}
+
 	navigated, genAfter := t.settle(actx, genBefore, 2*time.Second)
 	if navigated {
-		// The old reference table belongs to a document that no longer exists.
 		t.snapshots.Invalidate(tabID)
 	}
 
 	if actErr != nil {
-		// A dispatch that was sent and then failed ambiguously must not be
-		// reported as a clean failure.
 		if dispatched && isAmbiguous(actErr) {
 			return &types.ActionResult{
 				Status:                types.StatusUnknown,
@@ -139,14 +162,37 @@ func (m *Manager) Act(ctx context.Context, sessionID, tabID string, req types.Ac
 	}, nil
 }
 
+func (m *Manager) resolveAndVerifyNode(ctx context.Context, t *tab, ref *snapshots.Ref, refLabel string, timeout time.Duration) (string, *types.APIError) {
+	objectID, apiErr := t.page.ResolveBackendNode(ctx, ref.BackendID)
+	if apiErr != nil {
+		return "", apiErr
+	}
+	fp, apiErr := t.page.Fingerprint(ctx, objectID)
+	if apiErr != nil {
+		t.page.ReleaseObject(context.Background(), objectID)
+		return "", apiErr
+	}
+	if !fp.Connected {
+		t.page.ReleaseObject(context.Background(), objectID)
+		return "", &types.APIError{Code: types.CodeStaleRef, Message: "the referenced element has been removed from the document"}
+	}
+	if ref.Signature != "" && fp.Signature != ref.Signature {
+		t.page.ReleaseObject(context.Background(), objectID)
+		return "", &types.APIError{
+			Code:    types.CodeStaleRef,
+			Message: "the referenced element was replaced by a different node; take a fresh snapshot",
+			Detail:  map[string]any{"ref": refLabel},
+		}
+	}
+	if apiErr := t.page.WaitForActionability(ctx, objectID, timeout); apiErr != nil {
+		t.page.ReleaseObject(context.Background(), objectID)
+		return "", apiErr
+	}
+	return objectID, nil
+}
+
 // settle waits briefly for a post-action navigation to commit.
-//
-// It returns whether the document generation moved and the generation observed
-// at the end. The wait is bounded by both the caller's deadline and the settle
-// window, so a page that never navigates does not delay the response.
 func (t *tab) settle(ctx context.Context, from int64, window time.Duration) (bool, int64) {
-	// Phase 1: a short grace period to see whether the action started a load.
-	// A click with no navigation is decided here, cheaply.
 	graceDeadline := time.Now().Add(120 * time.Millisecond)
 	for time.Now().Before(graceDeadline) {
 		if cur := t.page.Generation(); cur != from {
@@ -162,7 +208,6 @@ func (t *tab) settle(ctx context.Context, from int64, window time.Duration) (boo
 		}
 	}
 	if !t.page.NavigationPending() {
-		// Give a slow-to-start navigation one more look before deciding.
 		select {
 		case <-ctx.Done():
 			return false, t.page.Generation()
@@ -176,7 +221,6 @@ func (t *tab) settle(ctx context.Context, from int64, window time.Duration) (boo
 		}
 	}
 
-	// Phase 2: a load is in flight, so wait for the commit within the window.
 	deadline := time.Now().Add(window)
 	for time.Now().Before(deadline) {
 		if cur := t.page.Generation(); cur != from {
@@ -191,27 +235,51 @@ func (t *tab) settle(ctx context.Context, from int64, window time.Duration) (boo
 	return false, t.page.Generation()
 }
 
+var supportedActions = []string{
+	types.ActionClick,
+	types.ActionFill,
+	types.ActionHover,
+	types.ActionScroll,
+	types.ActionPress,
+	types.ActionSelect,
+	types.ActionCheck,
+	types.ActionUncheck,
+	types.ActionDrag,
+}
+
 func validateAction(req types.ActionRequest) *types.APIError {
 	if req.Kind == "" {
 		return &types.APIError{Code: types.CodeInvalidRequest, Message: "kind is required", Detail: map[string]any{"field": "kind"}}
 	}
-	if req.Kind != types.ActionClick && req.Kind != types.ActionFill {
-		return &types.APIError{
-			Code:    types.CodeInvalidRequest,
-			Message: "kind must be click or fill",
-			Detail:  map[string]any{"field": "kind", "supported": []string{types.ActionClick, types.ActionFill}},
+	validKind := false
+	for _, k := range supportedActions {
+		if req.Kind == k {
+			validKind = true
+			break
 		}
 	}
-	if req.SnapshotID == "" {
-		return &types.APIError{Code: types.CodeInvalidRequest, Message: "snapshotId is required", Detail: map[string]any{"field": "snapshotId"}}
+	if !validKind {
+		return &types.APIError{
+			Code:    types.CodeInvalidRequest,
+			Message: "unsupported action kind",
+			Detail:  map[string]any{"field": "kind", "supported": supportedActions},
+		}
 	}
-	if req.Ref == "" {
-		return &types.APIError{Code: types.CodeInvalidRequest, Message: "ref is required", Detail: map[string]any{"field": "ref"}}
+
+	needsRef := req.Kind != types.ActionScroll && req.Kind != types.ActionPress
+	if needsRef || req.Ref != "" {
+		if req.SnapshotID == "" {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "snapshotId is required", Detail: map[string]any{"field": "snapshotId"}}
+		}
+		if req.Ref == "" {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "ref is required", Detail: map[string]any{"field": "ref"}}
+		}
 	}
+
 	switch req.Kind {
 	case types.ActionClick:
-		if req.Text != "" {
-			return &types.APIError{Code: types.CodeInvalidRequest, Message: "text is not valid for a click", Detail: map[string]any{"field": "text"}}
+		if req.Text != "" || req.Value != "" || req.Key != "" || req.Direction != "" || req.TargetRef != "" {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "text, value, key, direction, and targetRef are not valid for click", Detail: map[string]any{"field": "text"}}
 		}
 		if req.Button != "" && req.Button != "left" && req.Button != "right" && req.Button != "middle" {
 			return &types.APIError{Code: types.CodeInvalidRequest, Message: "button must be left, right or middle", Detail: map[string]any{"field": "button"}}
@@ -220,11 +288,35 @@ func validateAction(req types.ActionRequest) *types.APIError {
 			return &types.APIError{Code: types.CodeInvalidRequest, Message: "clickCount must be between 1 and 3", Detail: map[string]any{"field": "clickCount"}}
 		}
 	case types.ActionFill:
-		if req.Button != "" || req.ClickCount != 0 {
+		if req.Button != "" || req.ClickCount != 0 || req.Key != "" || req.Direction != "" || req.TargetRef != "" {
 			return &types.APIError{Code: types.CodeInvalidRequest, Message: "button and clickCount are not valid for a fill", Detail: map[string]any{"field": "button"}}
 		}
 		if req.Text == "" {
 			return &types.APIError{Code: types.CodeInvalidRequest, Message: "text is required for a fill", Detail: map[string]any{"field": "text"}}
+		}
+	case types.ActionHover, types.ActionCheck, types.ActionUncheck:
+		if req.Text != "" || req.Value != "" || req.Button != "" || req.ClickCount != 0 {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "unexpected fields for " + req.Kind}
+		}
+	case types.ActionScroll:
+		dir := strings.ToLower(req.Direction)
+		if dir != "" && dir != "up" && dir != "down" && dir != "left" && dir != "right" {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "direction must be up, down, left, or right", Detail: map[string]any{"field": "direction"}}
+		}
+		if req.Amount < 0 || req.Amount > 10000 {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "amount must be between 1 and 10000", Detail: map[string]any{"field": "amount"}}
+		}
+	case types.ActionPress:
+		if strings.TrimSpace(req.Key) == "" {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "key is required for press", Detail: map[string]any{"field": "key"}}
+		}
+	case types.ActionSelect:
+		if req.Value == "" && req.Text == "" {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "value or text is required for select", Detail: map[string]any{"field": "value"}}
+		}
+	case types.ActionDrag:
+		if req.TargetRef == "" {
+			return &types.APIError{Code: types.CodeInvalidRequest, Message: "targetRef is required for drag", Detail: map[string]any{"field": "targetRef"}}
 		}
 	}
 	if req.TimeoutMS < 0 || req.TimeoutMS > 120000 {
@@ -235,14 +327,15 @@ func validateAction(req types.ActionRequest) *types.APIError {
 
 // checkActionable rejects a kind that cannot apply to the referenced role.
 func checkActionable(kind string, ref *snapshots.Ref) *types.APIError {
-	if !ref.Actionable {
+	if !ref.Actionable && kind != types.ActionHover && kind != types.ActionScroll && kind != types.ActionDrag {
 		return &types.APIError{
 			Code:    types.CodeElementNotActionable,
 			Message: "the referenced element does not accept actions",
 			Detail:  map[string]any{"ref": ref.ID, "role": ref.Role},
 		}
 	}
-	if kind == types.ActionFill {
+	switch kind {
+	case types.ActionFill:
 		switch ref.Role {
 		case "textbox", "searchbox", "combobox", "spinbutton", "textboxmultiline":
 			return nil
@@ -252,11 +345,33 @@ func checkActionable(kind string, ref *snapshots.Ref) *types.APIError {
 			Message: "the referenced element is not a text input",
 			Detail:  map[string]any{"ref": ref.ID, "role": ref.Role},
 		}
+	case types.ActionSelect:
+		switch ref.Role {
+		case "combobox", "listbox":
+			return nil
+		}
+		if strings.EqualFold(ref.Tag, "SELECT") {
+			return nil
+		}
+		return &types.APIError{
+			Code:    types.CodeElementNotActionable,
+			Message: "the referenced element is not a select/combobox control",
+			Detail:  map[string]any{"ref": ref.ID, "role": ref.Role},
+		}
+	case types.ActionCheck, types.ActionUncheck:
+		switch ref.Role {
+		case "checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio":
+			return nil
+		}
+		return &types.APIError{
+			Code:    types.CodeElementNotActionable,
+			Message: "the referenced element is not a checkbox, radio, or switch",
+			Detail:  map[string]any{"ref": ref.ID, "role": ref.Role},
+		}
 	}
 	return nil
 }
 
-// isAmbiguous reports whether a failed dispatch may still have reached the page.
 func isAmbiguous(err *types.APIError) bool {
 	if err == nil {
 		return false
@@ -265,8 +380,6 @@ func isAmbiguous(err *types.APIError) bool {
 	case types.CodeTimeout, types.CodeActionOutcomeUnknown, types.CodeBrowserFailed:
 		return true
 	}
-	// A renderer-side exception after the input was dispatched is also
-	// ambiguous: the event sequence may have partly applied.
 	return err.Code == types.CodeInternal
 }
 
@@ -287,6 +400,228 @@ func (m *Manager) Screenshot(ctx context.Context, sessionID, tabID string) ([]by
 	}
 	s.touch(m.cfg.Now())
 	return png, nil
+}
+
+// History navigates back, forward, or reloads a tab.
+func (m *Manager) History(ctx context.Context, sessionID, tabID string, req types.HistoryRequest) (*types.NavigateResult, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	leave, apiErr := t.enter(ctx, m.cfg.Limits)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	defer leave()
+
+	t.snapshots.Invalidate(tabID)
+	timeout := time.Duration(req.TimeoutMS) * time.Millisecond
+	res, apiErr := t.page.NavigateHistory(ctx, req.Action, timeout)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	s.touch(m.cfg.Now())
+	return res, nil
+}
+
+// WaitFor waits for text to appear/disappear or a fixed duration on a tab.
+func (m *Manager) WaitFor(ctx context.Context, sessionID, tabID string, req types.WaitRequest) (*types.WaitResult, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	leave, apiErr := t.enter(ctx, m.cfg.Limits)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	defer leave()
+
+	res, apiErr := t.page.WaitFor(ctx, req)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	s.touch(m.cfg.Now())
+	return res, nil
+}
+
+// Extract returns structured visible text, headings, links, and scroll state.
+func (m *Manager) Extract(ctx context.Context, sessionID, tabID string, req types.ExtractRequest) (*types.ExtractResult, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	leave, apiErr := t.enter(ctx, m.cfg.Limits)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	defer leave()
+
+	res, apiErr := t.page.Extract(ctx, req)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	s.touch(m.cfg.Now())
+	return res, nil
+}
+
+// GetCookies returns the cookies visible to the tab.
+func (m *Manager) GetCookies(ctx context.Context, sessionID, tabID string) (*types.CookiesResult, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	leave, apiErr := t.enter(ctx, m.cfg.Limits)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	defer leave()
+
+	list, apiErr := t.page.GetCookies(ctx)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	s.touch(m.cfg.Now())
+	return &types.CookiesResult{Cookies: list}, nil
+}
+
+// SetCookies sets cookies on a tab after verifying every target URL/domain is
+// admitted by the egress policy.
+func (m *Manager) SetCookies(ctx context.Context, sessionID, tabID string, req types.SetCookiesRequest) (*types.CookiesResult, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	if len(req.Cookies) == 0 {
+		return nil, &types.APIError{Code: types.CodeInvalidRequest, Message: "cookies list cannot be empty", Detail: map[string]any{"field": "cookies"}}
+	}
+	curURL := t.page.CurrentURL()
+	for i := range req.Cookies {
+		c := &req.Cookies[i]
+		if strings.TrimSpace(c.Name) == "" {
+			return nil, &types.APIError{Code: types.CodeInvalidRequest, Message: "cookie name is required", Detail: map[string]any{"field": "name"}}
+		}
+		targetURL := c.URL
+		if targetURL == "" && c.Domain != "" {
+			scheme := "https://"
+			if strings.HasPrefix(curURL, "http://") {
+				scheme = "http://"
+			}
+			targetURL = scheme + strings.TrimPrefix(c.Domain, ".") + "/"
+		}
+		if targetURL == "" {
+			targetURL = curURL
+		}
+		if targetURL == "" || targetURL == "about:blank" {
+			return nil, &types.APIError{Code: types.CodeInvalidRequest, Message: "cookie requires url or domain when tab is on about:blank", Detail: map[string]any{"field": "url"}}
+		}
+		if _, apiErr := m.cfg.Policy.AdmitURL(targetURL); apiErr != nil {
+			return nil, apiErr
+		}
+		if c.URL == "" {
+			c.URL = targetURL
+		}
+	}
+
+	leave, apiErr := t.enter(ctx, m.cfg.Limits)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	defer leave()
+
+	if apiErr := t.page.SetCookies(ctx, req.Cookies); apiErr != nil {
+		return nil, apiErr
+	}
+	list, apiErr := t.page.GetCookies(ctx)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	s.touch(m.cfg.Now())
+	return &types.CookiesResult{Cookies: list}, nil
+}
+
+// ClearCookies clears all cookies in the tab's browser context.
+func (m *Manager) ClearCookies(ctx context.Context, sessionID, tabID string) *types.APIError {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return apiErr
+	}
+	leave, apiErr := t.enter(ctx, m.cfg.Limits)
+	if apiErr != nil {
+		return apiErr
+	}
+	defer leave()
+	if apiErr := t.page.ClearCookies(ctx); apiErr != nil {
+		return apiErr
+	}
+	s.touch(m.cfg.Now())
+	return nil
+}
+
+// Telemetry returns the captured console messages and network requests for a tab.
+func (m *Manager) Telemetry(ctx context.Context, sessionID, tabID string) (*types.TelemetryResult, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	out := t.page.Telemetry()
+	s.touch(m.cfg.Now())
+	return &out, nil
+}
+
+// Companion updates or inspects the 2nd companion cursor ("Ni-Cursor") across
+// both the Wayland/Hyprland layer-shell overlay and optional target browser tab.
+func (m *Manager) Companion(ctx context.Context, req types.CompanionRequest) (*types.CompanionState, *types.APIError) {
+	if m.companion == nil {
+		return nil, &types.APIError{Code: types.CodeInternal, Message: "companion controller not initialised"}
+	}
+	var targetTab *tab
+	if req.SessionID != "" && req.TabID != "" {
+		_, t, apiErr := m.lookup(req.SessionID, req.TabID)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		targetTab = t
+		if req.Ref != "" {
+			snapID := req.SnapshotID
+			if snapID == "" {
+				if cur := t.snapshots.Current(req.TabID); cur != nil {
+					snapID = cur.ID
+				}
+			}
+			ref, apiErr := snapshots.Resolve(t.snapshots, req.TabID, t.page, snapID, req.Ref, 0)
+			if apiErr != nil {
+				return nil, apiErr
+			}
+			objectID, apiErr := t.page.ResolveBackendNode(ctx, ref.BackendID)
+			if apiErr != nil {
+				return nil, apiErr
+			}
+			cx, cy, apiErr := t.page.ElementCenter(ctx, objectID)
+			t.page.ReleaseObject(context.Background(), objectID)
+			if apiErr != nil {
+				return nil, apiErr
+			}
+			req.X = &cx
+			req.Y = &cy
+			if req.Subtext == "" && ref.Name != "" {
+				req.Subtext = fmt.Sprintf("@%s • %s", ref.ID, ref.Name)
+			}
+		}
+	}
+
+	st, apiErr := m.companion.Apply(req)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	if targetTab != nil {
+		_ = targetTab.page.RenderCompanionOverlay(ctx, st)
+	}
+	return &st, nil
+}
+
+// CompanionController exposes the underlying companion controller.
+func (m *Manager) CompanionController() any {
+	return m.companion
 }
 
 // ensure referenced symbols stay imported

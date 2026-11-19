@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/xtrcom/xt-nichrome/internal/browser"
+	"github.com/xtrcom/xt-nichrome/internal/companion"
 	"github.com/xtrcom/xt-nichrome/internal/policy"
 	"github.com/xtrcom/xt-nichrome/internal/profiles"
 	"github.com/xtrcom/xt-nichrome/internal/snapshots"
@@ -79,8 +80,9 @@ type Config struct {
 
 // Manager is the session registry.
 type Manager struct {
-	cfg      Config
-	profiles *profiles.Manager
+	cfg       Config
+	profiles  *profiles.Manager
+	companion *companion.Controller
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -164,10 +166,11 @@ func New(cfg Config) (*Manager, error) {
 		return nil, err
 	}
 	m := &Manager{
-		cfg:      cfg,
-		profiles: pm,
-		sessions: map[string]*session{},
-		closedCh: make(chan struct{}),
+		cfg:       cfg,
+		profiles:  pm,
+		companion: companion.New(),
+		sessions:  map[string]*session{},
+		closedCh:  make(chan struct{}),
 	}
 	if cfg.Limits.IdleTimeout > 0 {
 		go m.evictLoop()
@@ -566,6 +569,9 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	m.sharedMu.Unlock()
 	if proc != nil {
 		_ = proc.Close()
+	}
+	if m.companion != nil {
+		m.companion.Close()
 	}
 	m.profiles.ReleaseAll()
 }

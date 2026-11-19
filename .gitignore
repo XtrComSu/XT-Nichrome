@@ -3,6 +3,8 @@
 /nichrome
 /nichrome-cli
 /nichrome-mcp
+/nichrome-cursor
+/nichrome-cursor-wayland
 /fixture-server
 /detect-server
 /dist/

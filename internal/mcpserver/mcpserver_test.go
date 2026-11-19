@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/xtrcom/xt-nichrome/internal/browser"
+	"github.com/xtrcom/xt-nichrome/internal/companion"
 	"github.com/xtrcom/xt-nichrome/internal/egress"
 	"github.com/xtrcom/xt-nichrome/internal/fixtures"
 	"github.com/xtrcom/xt-nichrome/internal/policy"
@@ -63,6 +64,9 @@ func testManager(t *testing.T, allowedOrigins []string) (*sessions.Manager, func
 	if err != nil {
 		proxy.Close()
 		t.Fatalf("sessions.New: %v", err)
+	}
+	if ctrl, ok := mgr.CompanionController().(*companion.Controller); ok {
+		ctrl.SetDisableExec(true)
 	}
 	cleanup := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -154,6 +158,22 @@ func TestToolRegistrationAndSchemas(t *testing.T) {
 		"browser_screenshot",
 		"browser_persona",
 		"browser_ready",
+		"browser_hover",
+		"browser_scroll",
+		"browser_press_key",
+		"browser_select_option",
+		"browser_check",
+		"browser_uncheck",
+		"browser_drag",
+		"browser_navigate_back",
+		"browser_navigate_forward",
+		"browser_reload",
+		"browser_wait_for",
+		"browser_extract",
+		"browser_cookies",
+		"browser_telemetry",
+		"companion_cursor_guide",
+		"companion_cursor_control",
 	}
 	got := make(map[string]*mcp.Tool, len(res.Tools))
 	for _, tool := range res.Tools {
@@ -346,8 +366,10 @@ func TestProtocolRoundTripWithRealBrowser(t *testing.T) {
 		t.Fatalf("unexpected snapshot text:\n%s", snapText)
 	}
 
-	// Find ref for Full name and Submit.
+	// Find ref for Full name, Agree to terms, Role select, and Submit.
 	nameRef := extractRefFromLines(t, snapText, "textbox", "Full name")
+	checkRef := extractRefFromLines(t, snapText, "checkbox", "Agree to terms")
+	selectRef := extractRefFromLines(t, snapText, "combobox", "Colour")
 	submitRef := extractRefFromLines(t, snapText, "button", "Submit")
 
 	// 5. browser_fill (omitting sessionId, tabId, and snapshotId — all resolved via affinity!)
@@ -357,6 +379,67 @@ func TestProtocolRoundTripWithRealBrowser(t *testing.T) {
 	})
 	if fillRes.IsError {
 		t.Fatalf("browser_fill failed: %+v", fillRes.Content)
+	}
+
+	// 5b. browser_hover, browser_check, browser_uncheck, browser_select_option, browser_scroll, browser_press_key
+	if r := callTool("browser_hover", map[string]any{"ref": submitRef}); r.IsError {
+		t.Fatalf("browser_hover failed: %+v", r.Content)
+	}
+	if r := callTool("browser_check", map[string]any{"ref": checkRef}); r.IsError {
+		t.Fatalf("browser_check failed: %+v", r.Content)
+	}
+	if r := callTool("browser_uncheck", map[string]any{"ref": checkRef}); r.IsError {
+		t.Fatalf("browser_uncheck failed: %+v", r.Content)
+	}
+	if r := callTool("browser_check", map[string]any{"ref": checkRef}); r.IsError {
+		t.Fatalf("browser_check second call failed: %+v", r.Content)
+	}
+	if r := callTool("browser_select_option", map[string]any{"ref": selectRef, "value": "Green"}); r.IsError {
+		t.Fatalf("browser_select_option failed: %+v", r.Content)
+	}
+	if r := callTool("browser_scroll", map[string]any{"direction": "down", "amount": 240}); r.IsError {
+		t.Fatalf("browser_scroll failed: %+v", r.Content)
+	}
+	if r := callTool("browser_press_key", map[string]any{"key": "Tab"}); r.IsError {
+		t.Fatalf("browser_press_key failed: %+v", r.Content)
+	}
+
+	// 5c. browser_extract, browser_wait_for, browser_cookies, browser_telemetry
+	if r := callTool("browser_extract", map[string]any{"maxChars": 4000}); r.IsError {
+		t.Fatalf("browser_extract failed: %+v", r.Content)
+	}
+	if r := callTool("browser_wait_for", map[string]any{"text": "Full name", "timeoutMs": 3000}); r.IsError {
+		t.Fatalf("browser_wait_for failed: %+v", r.Content)
+	}
+	if r := callTool("browser_cookies", map[string]any{
+		"action": "set",
+		"cookies": []map[string]any{
+			{"name": "xtn_session", "value": "ni28", "url": ts.URL + "/"},
+		},
+	}); r.IsError {
+		t.Fatalf("browser_cookies set failed: %+v", r.Content)
+	}
+	if r := callTool("browser_cookies", map[string]any{"action": "get"}); r.IsError {
+		t.Fatalf("browser_cookies get failed: %+v", r.Content)
+	}
+	if r := callTool("browser_telemetry", nil); r.IsError {
+		t.Fatalf("browser_telemetry failed: %+v", r.Content)
+	}
+
+	// 5d. companion_cursor_guide & companion_cursor_control (pointing at @eN with chat bubble!)
+	if r := callTool("companion_cursor_guide", map[string]any{
+		"ref":     submitRef,
+		"mood":    "friendly",
+		"subtext": "Submit form",
+		"message": "hey, you should click this to help me!",
+	}); r.IsError {
+		t.Fatalf("companion_cursor_guide failed: %+v", r.Content)
+	}
+	if r := callTool("companion_cursor_control", map[string]any{"action": "status"}); r.IsError {
+		t.Fatalf("companion_cursor_control status failed: %+v", r.Content)
+	}
+	if r := callTool("companion_cursor_control", map[string]any{"action": "hide"}); r.IsError {
+		t.Fatalf("companion_cursor_control hide failed: %+v", r.Content)
 	}
 
 	// 6. browser_screenshot (verify ImageContent block with PNG signature)

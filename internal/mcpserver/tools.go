@@ -262,6 +262,8 @@ func (s *Server) registerTools() {
 		Name:        "browser_ready",
 		Description: "Report daemon readiness, active session/tab counts, configured capacity limits, and egress policy proxy statistics.",
 	}, s.handleReady)
+
+	s.registerExtendedTools()
 }
 
 func (s *Server) handleOpenSession(ctx context.Context, req *mcp.CallToolRequest, in OpenSessionInput) (*mcp.CallToolResult, OpenSessionOutput, error) {

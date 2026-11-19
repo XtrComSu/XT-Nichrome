@@ -238,7 +238,9 @@ func dispatch(c *client, cmd string, args []string) error {
 		c.json = c.json || cf.json
 		return c.get(path)
 
-	case "close-tab", "persona", "screenshot", "go", "click", "fill":
+	case "close-tab", "persona", "screenshot", "go", "click", "fill",
+		"hover", "scroll", "press", "select", "check", "uncheck", "drag",
+		"back", "forward", "reload", "wait", "extract", "telemetry", "cookies":
 		cf, err := newCmd(cmd, args, cmdOpts{session: true, tab: true, wantArgs: true})
 		if err != nil {
 			return err
@@ -254,6 +256,15 @@ func dispatch(c *client, cmd string, args []string) error {
 			return c.delete(base)
 		case "persona":
 			return c.get(base + "/persona")
+		case "extract":
+			return c.get(base + "/extract")
+		case "telemetry":
+			return c.get(base + "/telemetry")
+		case "cookies":
+			if len(rest) > 0 && rest[0] == "clear" {
+				return c.delete(base + "/cookies")
+			}
+			return c.get(base + "/cookies")
 		case "screenshot":
 			out := "screenshot.png"
 			if len(rest) > 0 {
@@ -265,12 +276,33 @@ func dispatch(c *client, cmd string, args []string) error {
 				return errors.New("usage: go -session S -tab T URL")
 			}
 			return c.post(base+"/navigate", map[string]any{"url": rest[0]})
+		case "back", "forward", "reload":
+			return c.post(base+"/history", map[string]any{"action": cmd})
+		case "wait":
+			if len(rest) == 0 {
+				return errors.New("usage: wait -session S -tab T TEXT")
+			}
+			return c.post(base+"/wait", map[string]any{"text": rest[0]})
 		case "click":
 			if len(rest) != 2 {
 				return errors.New("usage: click -session S -tab T SNAPSHOT_ID REF")
 			}
 			return c.post(base+"/actions", map[string]any{
 				"kind": "click", "snapshotId": rest[0], "ref": rest[1],
+			})
+		case "hover":
+			if len(rest) != 2 {
+				return errors.New("usage: hover -session S -tab T SNAPSHOT_ID REF")
+			}
+			return c.post(base+"/actions", map[string]any{
+				"kind": "hover", "snapshotId": rest[0], "ref": rest[1],
+			})
+		case "check", "uncheck":
+			if len(rest) != 2 {
+				return fmt.Errorf("usage: %s -session S -tab T SNAPSHOT_ID REF", cmd)
+			}
+			return c.post(base+"/actions", map[string]any{
+				"kind": cmd, "snapshotId": rest[0], "ref": rest[1],
 			})
 		case "fill":
 			if len(rest) != 3 {
@@ -279,7 +311,65 @@ func dispatch(c *client, cmd string, args []string) error {
 			return c.post(base+"/actions", map[string]any{
 				"kind": "fill", "snapshotId": rest[0], "ref": rest[1], "text": rest[2],
 			})
+		case "select":
+			if len(rest) != 3 {
+				return errors.New("usage: select -session S -tab T SNAPSHOT_ID REF VALUE_OR_LABEL")
+			}
+			return c.post(base+"/actions", map[string]any{
+				"kind": "select", "snapshotId": rest[0], "ref": rest[1], "value": rest[2],
+			})
+		case "drag":
+			if len(rest) != 3 {
+				return errors.New("usage: drag -session S -tab T SNAPSHOT_ID SRC_REF DST_REF")
+			}
+			return c.post(base+"/actions", map[string]any{
+				"kind": "drag", "snapshotId": rest[0], "ref": rest[1], "targetRef": rest[2],
+			})
+		case "scroll":
+			dir := "down"
+			amt := 480
+			if len(rest) >= 1 {
+				dir = rest[0]
+			}
+			if len(rest) >= 2 {
+				if n, err := strconv.Atoi(rest[1]); err == nil {
+					amt = n
+				}
+			}
+			return c.post(base+"/actions", map[string]any{
+				"kind": "scroll", "direction": dir, "amount": amt,
+			})
+		case "press":
+			if len(rest) == 1 {
+				return c.post(base+"/actions", map[string]any{
+					"kind": "press", "key": rest[0],
+				})
+			}
+			if len(rest) == 3 {
+				return c.post(base+"/actions", map[string]any{
+					"kind": "press", "snapshotId": rest[0], "ref": rest[1], "key": rest[2],
+				})
+			}
+			return errors.New("usage: press -session S -tab T [SNAPSHOT_ID REF] KEY")
 		}
+
+	case "companion":
+		cf, err := newCmd(cmd, args, cmdOpts{wantArgs: true})
+		if err != nil {
+			return err
+		}
+		c.json = c.json || cf.json
+		rest := cf.fs.Args()
+		if len(rest) == 0 || rest[0] == "status" {
+			return c.get("/v1/companion")
+		}
+		if rest[0] == "hide" || rest[0] == "show" || rest[0] == "clear" {
+			return c.post("/v1/companion", map[string]any{"action": rest[0]})
+		}
+		return c.post("/v1/companion", map[string]any{
+			"action":  "guide",
+			"message": strings.Join(rest, " "),
+		})
 	}
 	usage()
 	return fmt.Errorf("unknown command %q", cmd)

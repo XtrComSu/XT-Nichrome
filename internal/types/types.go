@@ -170,6 +170,162 @@ type NavigateResult struct {
 	Title      string `json:"title,omitempty"`
 }
 
+// HistoryRequest is POST .../history.
+type HistoryRequest struct {
+	// Action is "back", "forward", or "reload".
+	Action    string `json:"action"`
+	TimeoutMS int    `json:"timeoutMs,omitempty"`
+}
+
+// WaitRequest is POST .../wait.
+type WaitRequest struct {
+	// Text waits until this substring appears in visible page text.
+	Text string `json:"text,omitempty"`
+	// TextGone waits until this substring disappears from visible page text.
+	TextGone string `json:"textGone,omitempty"`
+	// TimeMS waits a fixed duration in milliseconds (bounded to 30000).
+	TimeMS    int `json:"timeMs,omitempty"`
+	TimeoutMS int `json:"timeoutMs,omitempty"`
+}
+
+// WaitResult is the response from POST .../wait.
+type WaitResult struct {
+	Status     string `json:"status"`
+	Matched    bool   `json:"matched"`
+	WaitedMS   int64  `json:"waitedMs"`
+	Generation int64  `json:"generation"`
+	URL        string `json:"url,omitempty"`
+	Title      string `json:"title,omitempty"`
+}
+
+// ExtractRequest is the query for GET .../extract.
+type ExtractRequest struct {
+	MaxChars int `json:"maxChars,omitempty"`
+	MaxLinks int `json:"maxLinks,omitempty"`
+}
+
+// ExtractedLink is one hyperlink on the page.
+type ExtractedLink struct {
+	Text string `json:"text"`
+	Href string `json:"href"`
+}
+
+// ExtractResult returns clean visible text, headings, links, and scroll state.
+type ExtractResult struct {
+	URL            string          `json:"url"`
+	Title          string          `json:"title,omitempty"`
+	Generation     int64           `json:"generation"`
+	Text           string          `json:"text"`
+	Truncated      bool            `json:"truncated"`
+	Headings       []string        `json:"headings,omitempty"`
+	Links          []ExtractedLink `json:"links,omitempty"`
+	ScrollX        int             `json:"scrollX"`
+	ScrollY        int             `json:"scrollY"`
+	ScrollWidth    int             `json:"scrollWidth"`
+	ScrollHeight   int             `json:"scrollHeight"`
+	ViewportWidth  int             `json:"viewportWidth"`
+	ViewportHeight int             `json:"viewportHeight"`
+}
+
+// Cookie is one browser cookie entry.
+type Cookie struct {
+	Name     string  `json:"name"`
+	Value    string  `json:"value"`
+	Domain   string  `json:"domain,omitempty"`
+	Path     string  `json:"path,omitempty"`
+	URL      string  `json:"url,omitempty"`
+	Secure   bool    `json:"secure,omitempty"`
+	HTTPOnly bool    `json:"httpOnly,omitempty"`
+	SameSite string  `json:"sameSite,omitempty"`
+	Expires  float64 `json:"expires,omitempty"`
+}
+
+// SetCookiesRequest is POST .../cookies.
+type SetCookiesRequest struct {
+	Cookies []Cookie `json:"cookies"`
+}
+
+// CookiesResult is GET .../cookies.
+type CookiesResult struct {
+	Cookies []Cookie `json:"cookies"`
+}
+
+// ConsoleEntry is one captured console or log message on a tab.
+type ConsoleEntry struct {
+	Level     string `json:"level"`
+	Text      string `json:"text"`
+	URL       string `json:"url,omitempty"`
+	Line      int    `json:"line,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
+// NetworkEntry is one captured network request/response summary on a tab.
+type NetworkEntry struct {
+	RequestID    string `json:"requestId"`
+	Method       string `json:"method"`
+	URL          string `json:"url"`
+	ResourceType string `json:"resourceType,omitempty"`
+	Status       int    `json:"status,omitempty"`
+	MimeType     string `json:"mimeType,omitempty"`
+	Failed       bool   `json:"failed,omitempty"`
+	ErrorText    string `json:"errorText,omitempty"`
+	Timestamp    string `json:"timestamp"`
+}
+
+// TelemetryResult is GET .../telemetry.
+type TelemetryResult struct {
+	Console []ConsoleEntry `json:"console"`
+	Network []NetworkEntry `json:"network"`
+}
+
+// CompanionRequest updates or queries the 2nd companion cursor ("Ni-Cursor")
+// across both the Wayland/Hyprland layer-shell overlay and in-browser viewports.
+type CompanionRequest struct {
+	// Action is "guide", "move", "say", "point_ref", "show", "hide", "clear", or "status".
+	Action string `json:"action,omitempty"`
+	// X and Y are target coordinates (screen pixels on Wayland/Hyprland, or
+	// viewport pixels when pointing inside a tab).
+	X *float64 `json:"x,omitempty"`
+	Y *float64 `json:"y,omitempty"`
+	// Message is the chat bubble text (e.g. "hey, you should click this to help me!").
+	Message string `json:"message,omitempty"`
+	// Subtext is the small guiding label rendered right beside the mini cursor.
+	Subtext string `json:"subtext,omitempty"`
+	// Mood selects the companion expression: "friendly" | "curious" | "warn" | "sad" | "excited" | "thinking".
+	Mood string `json:"mood,omitempty"`
+	// Pulse triggers an animated attention ring around the cursor tip.
+	Pulse *bool `json:"pulse,omitempty"`
+	// Visible explicitly shows or hides the companion cursor.
+	Visible *bool `json:"visible,omitempty"`
+	// FollowActions automatically moves the companion cursor to narrate agent actions.
+	FollowActions *bool `json:"followActions,omitempty"`
+	// Optional tab & snapshot reference to point directly at a DOM element @eN.
+	SessionID  string `json:"sessionId,omitempty"`
+	TabID      string `json:"tabId,omitempty"`
+	SnapshotID string `json:"snapshotId,omitempty"`
+	Ref        string `json:"ref,omitempty"`
+}
+
+// CompanionState describes the live state of the 2nd companion cursor.
+type CompanionState struct {
+	Visible        bool    `json:"visible"`
+	WaylandActive  bool    `json:"waylandActive"`
+	WaylandDisplay string  `json:"waylandDisplay,omitempty"`
+	HyprlandActive bool    `json:"hyprlandActive"`
+	Monitor        string  `json:"monitor,omitempty"`
+	ScreenWidth    int     `json:"screenWidth"`
+	ScreenHeight   int     `json:"screenHeight"`
+	X              float64 `json:"x"`
+	Y              float64 `json:"y"`
+	Message        string  `json:"message,omitempty"`
+	Subtext        string  `json:"subtext,omitempty"`
+	Mood           string  `json:"mood"`
+	Pulse          bool    `json:"pulse"`
+	FollowActions  bool    `json:"followActions"`
+	TargetRef      string  `json:"targetRef,omitempty"`
+	UpdatedAt      string  `json:"updatedAt"`
+}
+
 // SnapshotRequest is the query for GET .../snapshot.
 type SnapshotRequest struct {
 	MaxChars int `json:"maxChars,omitempty"`
@@ -198,25 +354,41 @@ type SnapshotResult struct {
 
 // Action kinds.
 const (
-	ActionClick = "click"
-	ActionFill  = "fill"
+	ActionClick   = "click"
+	ActionFill    = "fill"
+	ActionHover   = "hover"
+	ActionScroll  = "scroll"
+	ActionPress   = "press"
+	ActionSelect  = "select"
+	ActionCheck   = "check"
+	ActionUncheck = "uncheck"
+	ActionDrag    = "drag"
 )
 
-// ActionRequest is POST .../actions. Kind is the discriminator; fields for the
-// other kind must be absent (strict decoding rejects unknown fields).
+// ActionRequest is POST .../actions. Kind is the discriminator; fields for
+// unrelated kinds must be absent (strict decoding rejects unknown fields).
 type ActionRequest struct {
 	Kind       string `json:"kind"`
-	SnapshotID string `json:"snapshotId"`
-	// Ref is the opaque reference from the snapshot (e.g. "e12").
-	Ref string `json:"ref"`
+	SnapshotID string `json:"snapshotId,omitempty"`
+	// Ref is the opaque reference from the snapshot (e.g. "e12"). Optional for
+	// viewport-level scroll or global key press.
+	Ref string `json:"ref,omitempty"`
+	// TargetRef is the destination reference for drag actions.
+	TargetRef string `json:"targetRef,omitempty"`
 	// Generation is optional; when set it must match the live document
 	// generation, otherwise the action is rejected as stale.
 	Generation int64 `json:"generation,omitempty"`
-	// Fill-only.
-	Text string `json:"text,omitempty"`
+	// Fill-only or Select-only text/value.
+	Text  string `json:"text,omitempty"`
+	Value string `json:"value,omitempty"`
 	// Click-only.
 	Button     string `json:"button,omitempty"` // left|right|middle
 	ClickCount int    `json:"clickCount,omitempty"`
+	// Scroll-only: direction ("down"|"up"|"left"|"right") and pixel amount.
+	Direction string `json:"direction,omitempty"`
+	Amount    int    `json:"amount,omitempty"`
+	// Press-only: key or chord (e.g. "Enter", "Escape", "Control+a", "Shift+Tab").
+	Key string `json:"key,omitempty"`
 	// Deadline for the action in milliseconds.
 	TimeoutMS int `json:"timeoutMs,omitempty"`
 	// ClearExisting selects select-all-then-type for fill (default true).

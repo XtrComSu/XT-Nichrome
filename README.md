@@ -4,12 +4,13 @@
 
 # XT-Nichrome (`Ni` — 28)
 
-A hardened headless Chromium service and Model Context Protocol (MCP) server for authorized agent workflows. It drives a real Chromium over the DevTools pipe (`--remote-debugging-pipe`), exposes both a strict REST API and a 13-tool MCP interface for sessions, tabs, accessibility snapshots, and ref-based actions, virtualizes human mouse trajectories and per-keystroke cadence, and presents a self-consistent Windows 11 desktop Chrome identity.
+A hardened headless Chromium service, **29-tool Model Context Protocol (MCP) server**, and **Wayland/Hyprland 2nd Companion Cursor (`Ni-Cursor`)** for authorized agent workflows. It drives a real Chromium over the DevTools pipe (`--remote-debugging-pipe`), exposes both a strict REST API and a comprehensive Playwright/Camofox+ MCP interface for sessions, tabs, accessibility snapshots, ref-based actions (`click`, `fill`, `hover`, `scroll`, `press`, `select`, `check`, `uncheck`, `drag`), history navigation, structured text/link extraction, console/network telemetry, and cookie management, virtualizes human mouse trajectories and per-keystroke cadence, and renders a click-through 2nd assistant cursor with floating chat bubbles on Wayland/Hyprland and inside browser tabs.
 
 ```
-agent ──HTTP / MCP──▶ nichrome / nichrome-mcp ──CDP pipe──▶ Chromium (win11-chrome-141)
-                              │
-                              └──▶ enforcing policy proxy ──▶ network
+agent ──HTTP / MCP (29 tools)──▶ nichrome / nichrome-mcp ──CDP pipe──▶ Chromium (win11-chrome-141)
+                                        │
+                                        ├──▶ enforcing policy proxy ──▶ network
+                                        └──▶ Ni-Cursor (wlr-layer-shell OVERLAY) ──▶ Wayland / Hyprland
 ```
 
 ## Why a browser service
@@ -41,14 +42,30 @@ TID=$(./bin/nichrome-cli new-tab -session "$SID" -json | jq -r .tabId)
 
 The bearer token is created on first run under `<state-dir>/token` with mode `0600`. Pass `-token` or `-token-file` to supply your own.
 
-## Model Context Protocol (MCP) Server
+## Model Context Protocol (MCP) Server & Companion 2nd Cursor ("Ni-Cursor")
 
-XT-Nichrome ships a first-class MCP server (`internal/mcpserver`) built on the official Go SDK (`github.com/modelcontextprotocol/go-sdk`) with two transports:
+XT-Nichrome ships a 29-tool MCP server (`internal/mcpserver`) built on the official Go SDK (`github.com/modelcontextprotocol/go-sdk`) with two transports:
 
 1. **Standalone Stdio Binary (`bin/nichrome-mcp`):** Launches its own in-process session manager and speaks JSON-RPC 2.0 over stdin/stdout (zero network listeners or bearer tokens required).
 2. **Streamable HTTP on Daemon (`bin/nichrome -mcp-http`):** Mounts `/mcp` on the daemon listener behind the same constant-time `Authorization: Bearer <token>` middleware as `/v1/*`.
 
-All 13 typed tools (`browser_open_session`, `browser_close_session`, `browser_list_sessions`, `browser_open_tab`, `browser_close_tab`, `browser_list_tabs`, `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_screenshot`, `browser_persona`, `browser_ready`) maintain per-MCP-session affinity (`sessionId`, `tabId`, `snapshotId`), enforce a per-client tab cap, and translate every service error code into actionable next-step guidance. See **[docs/MCP.md](docs/MCP.md)** for full tool schemas and client configuration.
+### All 29 MCP Tools (Beyond Camofox & Playwright MCP)
+- **Session & Tab Lifecycle (6):** `browser_open_session`, `browser_close_session`, `browser_list_sessions`, `browser_open_tab`, `browser_close_tab`, `browser_list_tabs`
+- **Navigation, History & Synchronization (6):** `browser_navigate`, `browser_navigate_back`, `browser_navigate_forward`, `browser_reload`, `browser_wait_for`, `browser_snapshot`
+- **Humanized Interactions (9):** `browser_click`, `browser_fill`, `browser_hover`, `browser_scroll` (momentum wheel ticks), `browser_press_key` (keys & modifier chords like `Control+a`, `Shift+Tab`), `browser_select_option`, `browser_check`, `browser_uncheck`, `browser_drag`
+- **Extraction, Cookies, Telemetry & Diagnostics (6):** `browser_extract` (clean text, headings, links, scroll geometry), `browser_cookies` (`get`/`set`/`clear` with origin allowlist validation), `browser_telemetry` (ring-buffered console logs & network requests/responses), `browser_screenshot`, `browser_persona`, `browser_ready`
+- **Companion 2nd Cursor — Wayland/Hyprland + In-Browser (2):**
+  - `companion_cursor_guide`: Glides a second mini-cursor (`Ni-Cursor`) along a minimum-jerk Bézier curve onto screen `(x, y)` or directly onto a snapshot `@eN` element, sets its mood (`friendly` `(^‿^)`, `curious` `(•_•?)`, `warn` `(•̀_•́)!`, `sad` `(´•︵•`)`, `excited` `(✦‿✦)`, `thinking` `(◔_◔)`), and displays a floating chat bubble (e.g. `"hey, you should click this to help me!"` or `"hey, this person isnt nice :("`).
+  - `companion_cursor_control`: Shows, hides, clears, queries status, or toggles `followActions` auto-narration.
+
+On Wayland/Hyprland desktops, you can also run the standalone companion cursor directly:
+```sh
+make cursor
+./bin/nichrome-cursor -demo
+./bin/nichrome-cursor -x 820 -y 440 -mood friendly -subtext "@e4 • Confirm" -say "hey, you should click this to help me!" -duration 5s
+```
+
+See **[docs/MCP.md](docs/MCP.md)** for full tool schemas and client configuration.
 
 ## REST API
 

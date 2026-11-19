@@ -48,6 +48,8 @@ type Page struct {
 	cursorX    float64
 	cursorY    float64
 	cursorInit bool
+	consoleLog []types.ConsoleEntry
+	networkLog []types.NetworkEntry
 
 	events chan struct{}
 	done   chan struct{}
@@ -291,6 +293,16 @@ func (p *Page) handleEvent(method string, params json.RawMessage) {
 		cancel()
 	case "Page.javascriptDialogClosed":
 		p.signal()
+	case "Runtime.consoleAPICalled":
+		p.recordConsoleEvent(params)
+	case "Log.entryAdded":
+		p.recordLogEvent(params)
+	case "Network.requestWillBeSent":
+		p.recordNetworkRequest(params)
+	case "Network.responseReceived":
+		p.recordNetworkResponse(params)
+	case "Network.loadingFailed":
+		p.recordNetworkFailure(params)
 	case "Inspector.targetCrashed", "Target.targetCrashed":
 		p.mu.Lock()
 		p.dead = true
@@ -613,7 +625,15 @@ func (p *Page) WaitForActionability(ctx context.Context, objectID string, timeou
 		if (el.disabled) return {ok:false, why:"disabled"};
 		if (el.getAttribute && el.getAttribute("aria-disabled") === "true") return {ok:false, why:"aria-disabled"};
 		const cx = r.left + r.width/2, cy = r.top + r.height/2;
-		if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) return {ok:false, why:"offscreen"};
+		if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) {
+			el.scrollIntoView({block:"center", inline:"center", behavior:"instant"});
+			const r2 = el.getBoundingClientRect();
+			const cx2 = r2.left + r2.width/2, cy2 = r2.top + r2.height/2;
+			if (cx2 < 0 || cy2 < 0 || cx2 > innerWidth || cy2 > innerHeight) return {ok:false, why:"offscreen"};
+			const hit2 = document.elementFromPoint(cx2, cy2);
+			if (hit2 && hit2 !== el && !el.contains(hit2) && !hit2.contains(el)) return {ok:false, why:"covered", by: hit2.tagName};
+			return {ok:true, rect:{x:r2.left,y:r2.top,w:r2.width,h:r2.height}};
+		}
 		const hit = document.elementFromPoint(cx, cy);
 		if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) return {ok:false, why:"covered", by: hit.tagName};
 		return {ok:true, rect:{x:r.left,y:r.top,w:r.width,h:r.height}};

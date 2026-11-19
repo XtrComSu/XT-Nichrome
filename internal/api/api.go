@@ -82,10 +82,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /v1/sessions/{id}/tabs/{tab}", s.auth(s.handleDeleteTab))
 
 	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/navigate", s.auth(s.handleNavigate))
+	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/history", s.auth(s.handleHistory))
+	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/wait", s.auth(s.handleWait))
 	s.mux.HandleFunc("GET /v1/sessions/{id}/tabs/{tab}/snapshot", s.auth(s.handleSnapshot))
+	s.mux.HandleFunc("GET /v1/sessions/{id}/tabs/{tab}/extract", s.auth(s.handleExtract))
 	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/actions", s.auth(s.handleAction))
 	s.mux.HandleFunc("GET /v1/sessions/{id}/tabs/{tab}/screenshot", s.auth(s.handleScreenshot))
 	s.mux.HandleFunc("GET /v1/sessions/{id}/tabs/{tab}/persona", s.auth(s.handlePersona))
+	s.mux.HandleFunc("GET /v1/sessions/{id}/tabs/{tab}/telemetry", s.auth(s.handleTelemetry))
+	s.mux.HandleFunc("GET /v1/sessions/{id}/tabs/{tab}/cookies", s.auth(s.handleGetCookies))
+	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/cookies", s.auth(s.handleSetCookies))
+	s.mux.HandleFunc("DELETE /v1/sessions/{id}/tabs/{tab}/cookies", s.auth(s.handleClearCookies))
+
+	s.mux.HandleFunc("GET /v1/companion", s.auth(s.handleGetCompanion))
+	s.mux.HandleFunc("POST /v1/companion", s.auth(s.handlePostCompanion))
 
 	if s.cfg.MCPHandler != nil {
 		s.mux.HandleFunc("/mcp", s.auth(s.cfg.MCPHandler.ServeHTTP))
@@ -355,6 +365,138 @@ func (s *Server) handlePersona(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	out, apiErr := s.cfg.Manager.PersonaReport(ctx, r.PathValue("id"), r.PathValue("tab"))
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	var req types.HistoryRequest
+	if apiErr := decodeJSON(r, &req, s.cfg.MaxBodyBytes, false); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.History(ctx, r.PathValue("id"), r.PathValue("tab"), req)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleWait(w http.ResponseWriter, r *http.Request) {
+	var req types.WaitRequest
+	if apiErr := decodeJSON(r, &req, s.cfg.MaxBodyBytes, false); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 65*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.WaitFor(ctx, r.PathValue("id"), r.PathValue("tab"), req)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	var req types.ExtractRequest
+	if v := q.Get("maxChars"); v != "" {
+		n, err := parseInt(v)
+		if err != nil || n < 0 {
+			writeError(w, (&types.APIError{Code: types.CodeInvalidRequest, Message: "maxChars must be a non-negative integer"}).WithRequestID(requestIDOf(r.Context())))
+			return
+		}
+		req.MaxChars = n
+	}
+	if v := q.Get("maxLinks"); v != "" {
+		n, err := parseInt(v)
+		if err != nil || n < 0 {
+			writeError(w, (&types.APIError{Code: types.CodeInvalidRequest, Message: "maxLinks must be a non-negative integer"}).WithRequestID(requestIDOf(r.Context())))
+			return
+		}
+		req.MaxLinks = n
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.Extract(ctx, r.PathValue("id"), r.PathValue("tab"), req)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
+	out, apiErr := s.cfg.Manager.Telemetry(r.Context(), r.PathValue("id"), r.PathValue("tab"))
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleGetCookies(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.GetCookies(ctx, r.PathValue("id"), r.PathValue("tab"))
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleSetCookies(w http.ResponseWriter, r *http.Request) {
+	var req types.SetCookiesRequest
+	if apiErr := decodeJSON(r, &req, s.cfg.MaxBodyBytes, false); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.SetCookies(ctx, r.PathValue("id"), r.PathValue("tab"), req)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleClearCookies(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	if apiErr := s.cfg.Manager.ClearCookies(ctx, r.PathValue("id"), r.PathValue("tab")); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGetCompanion(w http.ResponseWriter, r *http.Request) {
+	out, apiErr := s.cfg.Manager.Companion(r.Context(), types.CompanionRequest{Action: "status"})
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handlePostCompanion(w http.ResponseWriter, r *http.Request) {
+	var req types.CompanionRequest
+	if apiErr := decodeJSON(r, &req, s.cfg.MaxBodyBytes, true); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.Companion(ctx, req)
 	if apiErr != nil {
 		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
 		return

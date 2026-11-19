@@ -1,20 +1,25 @@
-# XT-Nichrome MCP Server
+# XT-Nichrome Model Context Protocol (MCP) Server & Companion 2nd Cursor
 
-XT-Nichrome ships with a first-class Model Context Protocol (MCP) server built on `github.com/modelcontextprotocol/go-sdk` v1.8.0. It wraps `sessions.Manager` directly in-process — no intermediate HTTP client hop — and supports both **stdio** (`cmd/nichrome-mcp`) and **Streamable HTTP** (`nichrome -mcp-http` mounted at `/mcp`).
+XT-Nichrome ships a first-class MCP server (`internal/mcpserver`) built on the official Go SDK (`github.com/modelcontextprotocol/go-sdk v1.8.0`) exposing **29 typed tools** across session management, tab lifecycle, Playwright/Camofox+ humanized interactions, structured extraction, console/network telemetry, cookie state, and the **Ni-Cursor 2nd Companion Cursor** (native Wayland/Hyprland `wlr-layer-shell` overlay + in-browser Shadow DOM overlay).
 
-## Transports
+## 1. Transports
 
-### 1. Stdio (`bin/nichrome-mcp`)
+### A. Standalone Stdio Server (`cmd/nichrome-mcp`)
+Starts its own in-process session manager, egress policy proxy, and Wayland/Hyprland companion controller, speaking MCP JSON-RPC 2.0 over `stdin`/`stdout`.
 
-Launch `nichrome-mcp` directly from any MCP host (Claude Desktop, Cursor, Antigravity, or custom MCP clients). It starts the local egress policy proxy and manages the Chromium pool for the lifetime of the stdio connection:
+```bash
+go build -trimpath -o bin/nichrome-mcp ./cmd/nichrome-mcp
+```
+
+Example MCP client config (`mcp.json` / Claude Desktop / Cursor / Antigravity):
 
 ```json
 {
   "mcpServers": {
     "xt-nichrome": {
-      "command": "/path/to/bin/nichrome-mcp",
+      "command": "/home/xtrcom/projects/XT-Nichrome/bin/nichrome-mcp",
       "args": [
-        "-allow", "https://example.com,https://api.example.com",
+        "-allow", "https://example.com,https://news.ycombinator.com",
         "-persona", "win11-chrome-141"
       ]
     }
@@ -22,46 +27,73 @@ Launch `nichrome-mcp` directly from any MCP host (Claude Desktop, Cursor, Antigr
 }
 ```
 
-### 2. Streamable HTTP (`bin/nichrome -mcp-http`)
+### B. Streamable HTTP on the Daemon (`cmd/nichrome -mcp-http`)
+Mounts `/mcp` on the `nichrome` HTTP daemon behind the same constant-time `Authorization: Bearer <token>` middleware as `/v1/*`:
 
-Pass `-mcp-http` to the main `nichrome` daemon to mount the MCP Streamable HTTP endpoint at `/mcp` alongside `/v1/*`. Requests to `/mcp` require the same `Authorization: Bearer <token>` header as the REST routes:
-
-```sh
+```bash
 ./bin/nichrome -listen 127.0.0.1:7788 -allow https://example.com -mcp-http
 ```
 
-## Tools (13)
+## 2. Complete 29-Tool Inventory
 
-| Tool | Required Inputs | Optional Inputs | Purpose |
-| --- | --- | --- | --- |
-| `browser_open_session` | — | `mode`, `profileId`, `persona` | Open an `ephemeral` or `persistent` browser session; sets the active `sessionId` for this MCP client. |
-| `browser_close_session` | — | `sessionId` | Tear down a session, close its tabs, and release its capacity slot / profile lock. |
-| `browser_list_sessions` | — | — | List active sessions and report the remembered `activeSessionId`. |
-| `browser_open_tab` | — | `sessionId`, `url` | Open a tab, verify the stealth persona, optionally navigate to `url`, and set the active `tabId`. |
-| `browser_close_tab` | — | `sessionId`, `tabId` | Close a tab and invalidate its snapshots. |
-| `browser_list_tabs` | — | `sessionId` | List open tabs in a session with URLs, titles, and document generations. |
-| `browser_navigate` | `url` | `sessionId`, `tabId`, `waitUntil`, `timeoutMs` | Navigate a tab to an allowlisted URL (`load` or `commit`), invalidating previous snapshots. |
-| `browser_snapshot` | — | `sessionId`, `tabId`, `maxChars`, `maxRefs`, `includeValues`, `scope` | Render a compact accessibility tree with `@eN` refs, returning `snapshotId` and `generation`. |
-| `browser_click` | `ref` | `sessionId`, `tabId`, `snapshotId`, `generation`, `button`, `clickCount`, `timeoutMs` | Click an `@eN` ref using a humanized Bézier mouse trajectory and realistic press dwell. |
-| `browser_fill` | `ref`, `text` | `sessionId`, `tabId`, `snapshotId`, `generation`, `clearExisting`, `timeoutMs` | Click to focus an `@eN` input and type `text` via virtualized per-character keystrokes. |
-| `browser_screenshot` | — | `sessionId`, `tabId` | Capture a viewport PNG returned as an MCP `image/png` content block. |
-| `browser_persona` | — | `sessionId`, `tabId` | Inspect the live tab's observable stealth surface and consistency report. |
-| `browser_ready` | — | — | Report readiness, active sessions/tabs, capacity limits, and egress denial counts. |
+### Session & Tab Lifecycle (6 Tools)
+| Tool | Arguments | Description |
+| --- | --- | --- |
+| `browser_open_session` | `mode?` (`ephemeral`\|`persistent`), `profileId?`, `persona?` | Creates a browser session and remembers `sessionId` as the default for this MCP client. |
+| `browser_close_session` | `sessionId?` | Closes the session and all of its tabs, releasing persistent profile locks. |
+| `browser_list_sessions` | *(none)* | Lists active sessions and reports `activeSessionId`. |
+| `browser_open_tab` | `sessionId?`, `url?` | Opens a tab, verifies the stealth persona, and remembers `tabId` as the default tab. |
+| `browser_close_tab` | `sessionId?`, `tabId?` | Closes the tab, invalidates snapshots, and frees a per-client tab slot. |
+| `browser_list_tabs` | `sessionId?` | Lists open tabs (`tabId`, `currentUrl`, `title`, `generation`) and `activeTabId`. |
 
-## Session, Tab & Snapshot Affinity
+### Navigation, History & Synchronization (6 Tools)
+| Tool | Arguments | Description |
+| --- | --- | --- |
+| `browser_navigate` | `url`, `waitUntil?` (`load`\|`commit`), `timeoutMs?`, `sessionId?`, `tabId?` | Navigates to an allowlisted URL and increments the document generation. |
+| `browser_navigate_back` | `timeoutMs?`, `sessionId?`, `tabId?` | Navigates backward one entry in `Page.getNavigationHistory`. |
+| `browser_navigate_forward` | `timeoutMs?`, `sessionId?`, `tabId?` | Navigates forward one entry in `Page.getNavigationHistory`. |
+| `browser_reload` | `timeoutMs?`, `sessionId?`, `tabId?` | Reloads the active document and waits for load settle. |
+| `browser_wait_for` | `text?`, `textGone?`, `timeMs?`, `timeoutMs?`, `sessionId?`, `tabId?` | Waits for visible text to appear, `textGone` to disappear, or a fixed `timeMs` pause. |
+| `browser_snapshot` | `maxChars?`, `maxRefs?`, `includeValues?`, `scope?`, `sessionId?`, `tabId?` | Captures a compact accessibility tree with `@eN` handles and remembers `snapshotId`. |
 
-Every connected MCP client session tracks its own remembered `sessionId`, `tabId` (per session), and `snapshotId` (per tab):
-- Calling `browser_open_session` sets the default `sessionId`.
-- Calling `browser_open_tab` sets the default `tabId` for that session.
-- Calling `browser_snapshot` sets the default `snapshotId` for that tab.
-- Subsequent calls to `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_screenshot`, and `browser_persona` can omit `sessionId`, `tabId`, and `snapshotId` entirely, or pass explicit IDs to target a different tab or session.
-- Runaway agents are bounded by a per-MCP-client open-tab cap (`DefaultMaxTabsPerClient = 8`) in addition to the daemon's per-session tab quota.
+### Humanized Interactions (9 Tools — Playwright + Camofox+)
+| Tool | Arguments | Description |
+| --- | --- | --- |
+| `browser_click` | `ref`, `button?`, `clickCount?`, `snapshotId?`, `generation?`, `timeoutMs?` | Moves along a minimum-jerk Bézier curve to an interior point of `@eN` and clicks with `18–42ms` press dwell. |
+| `browser_fill` | `ref`, `text`, `clearExisting?`, `snapshotId?`, `generation?`, `timeoutMs?` | Clicks to focus `@eN`, clears with selection + `Backspace`, and types per-character US-QWERTY `keyDown`/`keyUp` events. |
+| `browser_hover` | `ref`, `snapshotId?`, `generation?`, `timeoutMs?` | Glides onto `@eN` and hovers (`55–110ms`) to trigger CSS `:hover` and JS `mouseover` menus/tooltips. |
+| `browser_scroll` | `direction?` (`down`\|`up`\|`left`\|`right`), `amount?`, `ref?`, `snapshotId?` | Scrolls the viewport (or `@eN` container) using 6 momentum-eased `mouseWheel` ticks. |
+| `browser_press_key` | `key`, `ref?`, `snapshotId?`, `timeoutMs?` | Presses keys or chords (`Enter`, `Escape`, `Tab`, `ArrowDown`, `PageDown`, `Control+a`, `Shift+Tab`) with Windows virtual key codes. |
+| `browser_select_option` | `ref`, `value`, `snapshotId?`, `timeoutMs?` | Selects an `<option>` inside a `<select>` (`@eN`) by value or visible label and dispatches `input`/`change`. |
+| `browser_check` | `ref`, `snapshotId?`, `timeoutMs?` | Idempotently checks a checkbox, radio, or switch (`@eN`). |
+| `browser_uncheck` | `ref`, `snapshotId?`, `timeoutMs?` | Idempotently unchecks a checkbox or switch (`@eN`). |
+| `browser_drag` | `ref`, `targetRef`, `snapshotId?`, `timeoutMs?` | Humanized drag-and-drop from `@eN` (`ref`) onto `@eM` (`targetRef`) along a minimum-jerk curve with `buttons: 1` held. |
 
-## Actionable Error Mapping & Ambiguous Outcomes
+### Extraction, Cookies, Telemetry & Diagnostics (6 Tools)
+| Tool | Arguments | Description |
+| --- | --- | --- |
+| `browser_extract` | `maxChars?`, `maxLinks?`, `sessionId?`, `tabId?` | Extracts clean visible text, `h1-h3` headings, deduplicated `[text, href]` links, and scroll geometry (`scrollY`, `scrollHeight`). |
+| `browser_cookies` | `action?` (`get`\|`set`\|`clear`), `cookies?`, `sessionId?`, `tabId?` | Reads, seeds (validated against the origin allowlist), or clears browser context cookies. |
+| `browser_telemetry` | `sessionId?`, `tabId?` | Returns the tab's ring-buffered console messages (`console.log/warn/error`) and network requests/responses (`status`, `mimeType`, `failed`). |
+| `browser_screenshot` | `sessionId?`, `tabId?` | Returns a viewport PNG as an `mcp.ImageContent` (`image/png`) block. |
+| `browser_persona` | `sessionId?`, `tabId?` | Verifies the live tab's stealth identity and reports `consistent` + any mismatches. |
+| `browser_ready` | *(none)* | Reports daemon readiness, capacity, and egress policy denial counts. |
 
-Every `types.APIError` code is mapped to an MCP tool error (`IsError: true`) that tells the agent what to do next:
-- `STALE_REF`: Instructs the agent to call `browser_snapshot` for fresh `@eN` handles before retrying.
-- `ELEMENT_NOT_ACTIONABLE`: Explains role/action mismatch (e.g., use `browser_click` on checkboxes, `browser_fill` on textboxes) or element occlusion.
-- `POLICY_BLOCKED`: Explains that the destination origin is outside `-allow` and should not be retried.
-- `CAPACITY` / `BUSY_PROFILE`: Instructs the agent to close unused tabs/sessions or wait for in-flight operations.
-- `ACTION_OUTCOME_UNKNOWN`: When a click or fill is dispatched to the browser and the result is lost before completion, the tool returns a **non-failure warning** (`status: "unknown"`, `outcome: "unknown"`, `verifyBeforeRetry: true`, `freshSnapshotRequired: true`) instructing the agent to inspect the page with `browser_snapshot` before retrying so it never blindly double-submits a form.
+### Companion 2nd Cursor ("Ni-Cursor" — Wayland/Hyprland + In-Browser) (2 Tools)
+| Tool | Arguments | Description |
+| --- | --- | --- |
+| `companion_cursor_guide` | `message`, `ref?`, `x?`, `y?`, `mood?`, `subtext?`, `pulse?`, `sessionId?`, `tabId?`, `snapshotId?` | Glides the 2nd mini-cursor onto `(x, y)` or a snapshot `@eN` element, sets its mood (`friendly`, `curious`, `warn`, `sad`, `excited`, `thinking`), and shows a floating chat bubble (e.g. `"hey, you should click this to help me!"` or `"hey, this person isnt nice :("`). |
+| `companion_cursor_control` | `action` (`status`\|`show`\|`hide`\|`clear`), `followActions?` | Shows, hides, clears, or queries the companion cursor state, or toggles `followActions` auto-narration. |
+
+## 3. Native Wayland / Hyprland Layer-Shell Overlay (`cmd/nichrome-cursor`)
+
+On Wayland compositors supporting `wlr-layer-shell` (such as Hyprland and Sway), XT-Nichrome renders the 2nd companion cursor directly on the desktop `OVERLAY` layer (`internal/companion/wayland_overlay.c` compiled into `bin/nichrome-cursor-wayland`):
+- **100% Click-Through:** Applies an empty `cairo_region_t` input mask via `gdk_window_input_shape_combine_region` and `GTK_LAYER_SHELL_KEYBOARD_MODE_NONE` so the user's real mouse clicks, hovers, and keystrokes pass straight through to windows underneath.
+- **60 FPS Minimum-Jerk Glide:** Animates smoothly between targets along a quadratic/cubic Bézier arc with a Flash & Hogan minimum-jerk velocity profile ($10u^3 - 15u^4 + 6u^5$), gentle idle bobbing, and expanding crimson attention rings.
+- **Standalone CLI Demo:**
+  ```bash
+  make cursor
+  ./bin/nichrome-cursor -demo
+  # Or guide to a specific spot on Hyprland:
+  ./bin/nichrome-cursor -x 820 -y 440 -mood friendly -subtext "@e4 • Confirm" -say "hey, you should click this to help me!" -duration 5s
+  ```
