@@ -3,11 +3,13 @@
 package companion
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,12 +217,6 @@ func (c *Controller) syncWaylandLocked() {
 	if c.disableExec || c.state.WaylandDisplay == "" {
 		return
 	}
-	if c.state.Visible && c.stdin == nil {
-		c.startWaylandHelperLocked()
-	}
-	if c.stdin == nil {
-		return
-	}
 	wire := map[string]any{
 		"visible": c.state.Visible,
 		"pulse":   c.state.Pulse,
@@ -229,6 +225,28 @@ func (c *Controller) syncWaylandLocked() {
 		"message": c.state.Message,
 		"subtext": c.state.Subtext,
 		"mood":    c.state.Mood,
+	}
+	// If the standalone nichrome-cursor daemon is running on 127.0.0.1:7798
+	// (and we are not that daemon ourselves), forward to it so MCP tools and the
+	// desktop companion share a single Wayland overlay surface.
+	if os.Getenv("XT_NICHROME_CURSOR_DAEMON") == "" && c.stdin == nil {
+		if body, err := json.Marshal(wire); err == nil {
+			client := &http.Client{Timeout: 250 * time.Millisecond}
+			resp, err := client.Post("http://127.0.0.1:7798/overlay", "application/json", bytes.NewReader(body))
+			if err == nil {
+				_ = resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					c.state.WaylandActive = true
+					return
+				}
+			}
+		}
+	}
+	if c.state.Visible && c.stdin == nil {
+		c.startWaylandHelperLocked()
+	}
+	if c.stdin == nil {
+		return
 	}
 	line, err := json.Marshal(wire)
 	if err != nil {
