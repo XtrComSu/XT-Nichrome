@@ -1,0 +1,23 @@
+# Built binaries
+/bin/
+/nichrome
+/nichrome-cli
+/nichrome-mcp
+/fixture-server
+/detect-server
+/dist/
+
+# Local state, profiles, handoff notes and downloaded font sources
+/.state/
+/.fonts/
+/deploy/fonts/
+/.dsh-project-memory/
+/HANDOFF.md
+*.log
+*.png
+!docs/*.png
+!assets/png/*.png
+
+# Go
+*.test
+*.out
