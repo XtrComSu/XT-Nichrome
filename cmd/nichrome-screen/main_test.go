@@ -10,7 +10,7 @@ import (
 func TestCaptureRecordsPrivateScreenAndContext(t *testing.T) {
 	bin := t.TempDir()
 	for name, script := range map[string]string{
-		"grim":     "#!/bin/sh\nprintf PNG > \"$1\"\n",
+		"grim":     "#!/bin/sh\n[ \"$1\" = '-c' ] || exit 2\nprintf PNG > \"$2\"\n",
 		"hyprctl":  "#!/bin/sh\ncase \"$1\" in cursorpos) echo '321, 456';; activewindow) echo '{\"class\":\"Code\",\"title\":\"editor\"}';; esac\n",
 		"wl-paste": "#!/bin/sh\nprintf selected\n",
 	} {

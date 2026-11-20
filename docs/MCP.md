@@ -2,8 +2,9 @@
 
 ## Alt screen handoff (Hyprland)
 
-`nichrome-screen` captures the desktop, pointer coordinates, active window, and
-Wayland primary selection when the user presses either Alt key. The Hyprland
+`nichrome-screen` captures the desktop with the real pointer visible, pointer
+coordinates, active window, and Wayland primary selection when the user presses
+either Alt key. The Hyprland
 binding uses `non_consuming`, so existing Alt shortcuts remain available.
 
 ```bash
@@ -23,7 +24,9 @@ hl.bind("Alt_R", hl.dsp.exec_cmd("/absolute/path/to/bin/nichrome-screen"), { non
 Each capture
 replaces the prior image in `$XDG_RUNTIME_DIR/xt-nichrome/screen/`, a private
 directory. `latest.json` contains the image path, UTC time, pointer X/Y,
-active window class/title, and selected text when available. An agent can read
+active window class/title, and primary selection text when available. The
+primary selection may persist after switching windows, so agents should treat
+it as retained text unless the screenshot shows the highlight. An agent can read
 the JSON and open the image path with its local image viewer. Alt does not
 start a new agent turn by itself; a running agent must poll `-latest` to see
 new captures, or the user can send a message after pressing Alt.

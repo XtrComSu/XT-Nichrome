@@ -147,8 +147,9 @@ Selection watching requires `wl-paste`. Use the installation guide to check nati
 
 For desktop context, `make screen` builds `bin/nichrome-screen`. A Hyprland
 binding can run it when either Alt key is pressed. It saves one private desktop
-image plus `latest.json` with the pointer position, active window, and current
-primary text selection. A running agent can read that file and open the image
+image with the pointer visible plus `latest.json` with pointer coordinates,
+active window, and Wayland primary selection. That selection can outlive the
+window where it was made. A running agent can read the file and open the image
 to see what you are pointing at. [Alt screen handoff setup](docs/MCP.md#alt-screen-handoff-hyprland)
 
 ## Operations
