@@ -1,200 +1,193 @@
 <p align="center">
-  <img src="assets/logo-word.svg" alt="XT-Nichrome — Element 28 (Nickel)" width="860">
+  <img src="assets/logo-word.svg" alt="XT-Nichrome — Ni, element 28" width="860">
 </p>
 
-# XT-Nichrome (`Ni` — 28)
+# XT-Nichrome
 
-A hardened headless Chromium service, **35-tool Model Context Protocol (MCP) server**, and **Wayland/Hyprland 2nd Companion Cursor (`Ni-Cursor`)** for authorized agent workflows. It drives a real Chromium over the DevTools pipe (`--remote-debugging-pipe`), exposes both a strict REST API and a comprehensive Playwright/Camofox+ MCP interface for sessions, tabs, accessibility snapshots, ref-based actions (`click`, `fill`, `hover`, `scroll`, `press`, `select`, `check`, `uncheck`, `drag`, `upload`), JS evaluation, PDF generation, Web Storage (`localStorage`/`sessionStorage`), dialog handling, history navigation, structured text/link extraction, console/network telemetry, and cookie management, virtualizes human mouse trajectories and per-keystroke cadence, and renders a click-through 2nd assistant cursor with floating chat bubbles and real-time highlight/selection responses on Wayland/Hyprland and inside browser tabs.
+XT-Nichrome is a Linux service for driving Chromium from a CLI, REST client, or MCP client. Use it to run browser tests against local fixtures, inspect pages through accessibility snapshots, and capture screenshots or PDFs. The optional **Ni-Cursor** displays a second pointer and guidance on supported Wayland desktops and in browser tabs.
 
-```
-agent ──HTTP / MCP (35 tools)──▶ nichrome / nichrome-mcp ──CDP pipe──▶ Chromium (win11-chrome-141)
-                                        │
-                                        ├──▶ enforcing policy proxy ──▶ network
-                                        └──▶ Ni-Cursor (wlr-layer-shell OVERLAY) ──▶ Wayland / Hyprland
-```
+[Quick start](#quick-start) · [Architecture](#architecture) · [MCP and REST](#mcp-and-rest) · [Operations](#operations) · [Testing and benchmarks](#testing-and-benchmarks)
 
-## Why a browser service
-
-An agent that shells out to a raw headless browser gets an unpredictable process, a DOM-shaped string, and immediate bot-detection flags. An agent that talks to XT-Nichrome gets:
-
-- **A lease.** Sessions are bounded, tabs are bounded, and one persistent profile cannot be opened twice (`flock`). Capacity is reported at `/readyz` (or `browser_ready`) before you ask for work.
-- **References, not selectors.** `snapshot` (`browser_snapshot`) returns a compact accessibility tree with stable `@eN` handles. Acting on a handle that belongs to a superseded document is refused (`409 STALE_REF`) rather than silently retargeted, so an agent cannot click a button on the wrong page.
-- **Humanized input virtualization.** `click` and `fill` never teleport to exact bounding-box midpoints or dump raw strings without key events. Every click selects a 2D triangular interior point (verified via `document.elementFromPoint`), moves the virtual cursor along a cubic Bézier curve with a Flash & Hogan minimum-jerk velocity profile (`10u³ - 15u⁴ + 6u⁵`) and micro-tremor, aligns `MouseEvent.screenY` with the desktop toolbar offset, and holds `mousedown` for a realistic `18–42 ms` dwell before `mouseup`. Every `fill` focuses the target with a humanized click, clears existing content via selection + `Backspace`, and dispatches per-character US-QWERTY `keyDown`/`keyUp` events with `windowsVirtualKeyCode`, `ShiftLeft` (`modifiers: 8`) transitions, and human digraph cadence.
-- **One egress door.** The browser is launched with name resolution disabled and every connection pointed at a local proxy that enforces an origin allowlist and blocks RFC1918/loopback/link-local/metadata ranges by default.
+| Interface | Use it for | Entry point |
+| --- | --- | --- |
+| **CLI** | Shell scripts, local smoke tests, and interactive diagnosis | `bin/nichrome-cli` |
+| **REST** | Integration with a running service from any HTTP client | `bin/nichrome` · `/v1/*` |
+| **MCP over stdio** | A client-managed local process with 37 tools, 4 resources, and 3 prompts | `bin/nichrome-mcp` |
+| **MCP over HTTP** | A running daemon shared by REST and MCP clients | `bin/nichrome -mcp-http` · `/mcp` |
+| **Ni-Cursor** | Optional visual guidance and selection responses | `bin/nichrome-cursor` |
 
 ## Quick start
 
+Run a form smoke test on a loopback fixture. You need Go 1.25 or later, Chromium, Python 3 with FontTools for the daemon's font pack, and `jq` for the shell example. See the installation guide for platform packages and the Chromium build used by the project. [Installation guide](docs/INSTALL.md)
+
+From the repository root, build the binaries and start the fixture server in the first terminal.
+
 ```sh
-make build cli mcp fixture detect   # bin/nichrome, bin/nichrome-cli, bin/nichrome-mcp, bin/fixture-server, bin/detect-server
-make fonts                          # build the Windows-shaped font pack (once)
-
-./bin/fixture-server -listen 127.0.0.1:7789 &
-./bin/nichrome -listen 127.0.0.1:7788 -allow http://127.0.0.1:7789 -allow-private -mcp-http &
-export XT_NICHROME_STATE=~/.local/share/xt-nichrome
-
-SID=$(./bin/nichrome-cli new-session -json | jq -r .sessionId)
-TID=$(./bin/nichrome-cli new-tab -session "$SID" -json | jq -r .tabId)
-./bin/nichrome-cli go       -session "$SID" -tab "$TID" http://127.0.0.1:7789/form
-./bin/nichrome-cli snapshot -session "$SID" -tab "$TID"
-./bin/nichrome-cli fill     -session "$SID" -tab "$TID" SNAPSHOT e1 "Ada Lovelace"
-./bin/nichrome-cli click    -session "$SID" -tab "$TID" SNAPSHOT e9
+make build cli fixture
+make fonts
+./bin/fixture-server -listen 127.0.0.1:7789
 ```
 
-The bearer token is created on first run under `<state-dir>/token` with mode `0600`. Pass `-token` or `-token-file` to supply your own.
+Start the daemon in a second terminal. This command allows exactly the fixture origin and enables loopback access for that test.
 
-## Model Context Protocol (MCP) Server & Companion 2nd Cursor ("Ni-Cursor")
-
-XT-Nichrome ships a 35-tool MCP server (`internal/mcpserver`) built on the official Go SDK (`github.com/modelcontextprotocol/go-sdk`) with two transports:
-
-1. **Standalone Stdio Binary (`bin/nichrome-mcp`):** Launches its own in-process session manager and speaks JSON-RPC 2.0 over stdin/stdout (zero network listeners or bearer tokens required).
-2. **Streamable HTTP on Daemon (`bin/nichrome -mcp-http`):** Mounts `/mcp` on the daemon listener behind the same constant-time `Authorization: Bearer <token>` middleware as `/v1/*`.
-
-### All 35 MCP Tools (Beyond Camofox & Playwright MCP)
-- **Session & Tab Lifecycle (6):** `browser_open_session`, `browser_close_session`, `browser_list_sessions`, `browser_open_tab`, `browser_close_tab`, `browser_list_tabs`
-- **Navigation, History & Synchronization (6):** `browser_navigate`, `browser_navigate_back`, `browser_navigate_forward`, `browser_reload`, `browser_wait_for`, `browser_snapshot`
-- **Humanized Interactions (10):** `browser_click`, `browser_fill`, `browser_hover`, `browser_scroll` (momentum wheel ticks), `browser_press_key` (keys & modifier chords like `Control+a`, `Shift+Tab`), `browser_select_option`, `browser_check`, `browser_uncheck`, `browser_drag`, `browser_upload_file`
-- **Evaluation, Storage, PDF, Extraction, Cookies & Telemetry (10):** `browser_evaluate` (page or `@eN` element evaluation), `browser_pdf` (`Page.printToPDF`), `browser_storage` (`localStorage`/`sessionStorage`), `browser_dialogs` (JS dialog log & policy), `browser_extract` (clean text, headings, links, scroll geometry), `browser_cookies` (`get`/`set`/`clear` with origin allowlist validation), `browser_telemetry` (ring-buffered console logs, network requests/responses, and dialogs), `browser_screenshot`, `browser_persona`, `browser_ready`
-- **Companion 2nd Cursor — Wayland/Hyprland + In-Browser (3):**
-  - `companion_cursor_guide`: Glides a second mini-cursor (`Ni-Cursor`) along a minimum-jerk Bézier curve onto screen `(x, y)` or directly onto a snapshot `@eN` element, sets its mood (`friendly` `(^‿^)`, `curious` `(•_•?)`, `warn` `(•̀_•́)!`, `sad` `(;︵;)`, `excited` `(✦‿✦)`, `thinking` `(◔_◔)`), and displays a floating chat bubble (e.g. `"hey, you should click this to help me!"` or `"hey, this person isnt nice :("`).
-  - `companion_cursor_control`: Shows, hides, clears, queries status, or toggles `followActions` auto-narration.
-  - `companion_analyze_selection`: Analyzes highlighted/selected text (or reads Wayland primary selection via `wl-paste --primary`), classifies tone/intent or decodes base64/hex/timestamps, and optionally pops up `Ni-Cursor` with a real-time reply.
-
-On Wayland/Hyprland desktops, you can also run the standalone companion cursor in on-demand selection mode (stays hidden until you highlight text, replies in real time, then auto-hides after 6s):
 ```sh
-make cursor
+./bin/nichrome -listen 127.0.0.1:7788 \
+  -allow http://127.0.0.1:7789 -allow-private
+```
+
+Run the workflow in a third terminal. The CLI reads the generated token from the default state directory for authenticated commands.
+
+```bash
+(
+  set -euo pipefail
+
+  ./bin/nichrome-cli ready -json | jq '{ready, capacity, egress}'
+
+  SID=$(./bin/nichrome-cli new-session -json | jq -er '.sessionId')
+  trap './bin/nichrome-cli kill-session -session "$SID" >/dev/null' EXIT
+
+  TID=$(./bin/nichrome-cli new-tab -session "$SID" -json \
+    http://127.0.0.1:7789/form | jq -er '.tabId')
+  ./bin/nichrome-cli snapshot -session "$SID" -tab "$TID"
+
+  # Find the current textbox and use its own snapshot ID and reference.
+  FIELD=$(./bin/nichrome-cli find -session "$SID" -tab "$TID" -json 'Full name')
+  FIELD_SNAPSHOT=$(jq -er '.snapshotId' <<< "$FIELD")
+  FIELD_REF=$(jq -er '.matches[] | select(.role == "textbox" and .name == "Full name") | .ref | ltrimstr("@")' <<< "$FIELD")
+  ./bin/nichrome-cli fill -session "$SID" -tab "$TID" "$FIELD_SNAPSHOT" "$FIELD_REF" 'Ada Lovelace'
+
+  SUBMIT=$(./bin/nichrome-cli find -session "$SID" -tab "$TID" -json 'Submit')
+  SUBMIT_SNAPSHOT=$(jq -er '.snapshotId' <<< "$SUBMIT")
+  SUBMIT_REF=$(jq -er '.matches[] | select(.role == "button" and .name == "Submit") | .ref | ltrimstr("@")' <<< "$SUBMIT")
+  ./bin/nichrome-cli click -session "$SID" -tab "$TID" "$SUBMIT_SNAPSHOT" "$SUBMIT_REF"
+  ./bin/nichrome-cli wait -session "$SID" -tab "$TID" 'name=Ada Lovelace'
+)
+```
+
+The fixture echoes the submitted name. The subshell closes the test session when the workflow ends. Stop the daemon and fixture server with Ctrl-C when finished.
+
+## Architecture
+
+![XT-Nichrome runtime architecture showing the client, session manager, Chromium over the DevTools pipe, policy proxy, permitted origins, and optional Ni-Cursor](docs/diagrams/runtime.svg)
+
+- **Sessions and tabs.** Each server instance owns its session manager. Ephemeral sessions use isolated contexts in a shared Chromium process. Persistent sessions use dedicated Chromium processes and locked profile directories under `<state-dir>/profiles`. Operations on a tab share a bounded queue.
+- **Browser control.** Go talks to Chromium over the Chromium DevTools Protocol (CDP) pipe. The browser has no TCP debugging listener. The HTTP daemon's REST and MCP endpoints are separate from that pipe.
+- **Network access.** Navigation admission checks the destination origin. Chromium's HTTP, HTTPS, and WebSocket traffic passes through a local proxy that checks policy and resolved IPs. Private and loopback access is blocked by default.
+- **Accessibility snapshots.** A snapshot returns readable page structure and handles such as `@e3`. A handle belongs to one snapshot of one tab. When a navigation or document change invalidates it, inspect the page again before acting.
+
+[Internal architecture](docs/ARCHITECTURE.md)
+
+### Action recovery
+
+```mermaid
+flowchart LR
+    snapshot["Snapshot or find"] --> action["Act using the snapshot ID and ref"]
+    action -->|Success| move["Continue"]
+    action -->|STALE_REF| refresh["Inspect again and resolve the target"]
+    refresh --> action
+    action -->|ACTION_OUTCOME_UNKNOWN| verify["Inspect the resulting page state"]
+    verify -->|Effect confirmed| move
+    verify -->|Safety unclear| stop["Stop and inspect"]
+    verify -->|Safe to retry| refresh
+```
+
+A fill or click can reach the page before the client sees the result. On `ACTION_OUTCOME_UNKNOWN`, or if the connection drops during a write, check for a receipt, changed field, or another observable effect before retrying. An unknown result on a submit can otherwise turn one submission into two.
+
+## MCP and REST
+
+### MCP transports
+
+Build the stdio server with `make mcp`. Point your MCP client at the absolute path to `bin/nichrome-mcp`. The client starts and owns that process and its sessions. Stdio carries protocol messages on stdout and logs on stderr. To scope browsing to approved origins, set `-allow` to a comma-separated list of those origins, such as the origin of a staging app your team controls.
+
+To share the HTTP daemon's sessions between REST and MCP, add `-mcp-http` to the daemon's existing startup flags. Point the client at `http://127.0.0.1:7788/mcp` for the local setup and provide the same bearer token used by REST. [MCP setup](docs/INSTALL.md) · [Tools, resources, and prompts](docs/MCP.md)
+
+| Task | MCP entry points | REST equivalent |
+| --- | --- | --- |
+| Check capacity | `browser_ready`, `nichrome://status/ready` | `GET /readyz` |
+| Create a session and tab | `browser_open_session`, `browser_open_tab` | `POST /v1/sessions`, `POST /v1/sessions/{id}/tabs` |
+| Inspect an accessible page | `browser_snapshot`, `browser_find`, `browser_extract` | `GET …/snapshot`, `POST …/find`, `GET …/extract` |
+| Interact with the page | `browser_click`, `browser_fill`, `browser_press_key` | `POST …/actions` |
+| Observe or export the result | `browser_telemetry`, `browser_screenshot`, `browser_pdf` | `GET …/telemetry`, `GET …/screenshot`, `GET …/pdf` |
+| Display guidance | `companion_cursor_guide`, `companion_cursor_control` | `GET /v1/companion`, `POST /v1/companion` |
+
+In the table, `…` stands for `/v1/sessions/{id}/tabs/{tab}`. [REST routes, payloads, and errors](docs/API.md)
+
+### Ni-Cursor
+
+Run `make cursor` to build the Go companion. The target also builds the native overlay when the GTK 3, layer-shell, Cairo, and PangoCairo development dependencies are detected. For a standalone desktop overlay that reacts to the Wayland primary selection, start it from your desktop session.
+
+```sh
 ./bin/nichrome-cursor -listen 127.0.0.1:7798 -watch-selection -auto-hide 6s
 ```
 
-See **[docs/MCP.md](docs/MCP.md)** for full tool schemas and client configuration.
+Selection watching requires `wl-paste`. Use the installation guide to check native dependencies and configure Hyprland shortcuts. [Ni-Cursor setup](docs/INSTALL.md#4-optional-wayland--hyprland-2nd-companion-cursor-ni-cursor)
 
-## REST API
+## Operations
 
-| Method | Path | Purpose |
+| Setting | Default | What it controls |
 | --- | --- | --- |
-| `GET` | `/healthz` | process liveness |
-| `GET` | `/readyz` | readiness, capacity, egress state, browser revision |
-| `POST` | `/v1/sessions` | create a session (`ephemeral` or `persistent`) |
-| `GET` | `/v1/sessions` | list sessions |
-| `GET` | `/v1/sessions/{id}` | describe one session |
-| `DELETE` | `/v1/sessions/{id}` | destroy a session |
-| `POST` | `/v1/sessions/{id}/tabs` | open a tab |
-| `GET` | `/v1/sessions/{id}/tabs` | list tabs |
-| `DELETE` | `/v1/sessions/{id}/tabs/{tab}` | close a tab |
-| `POST` | `/v1/sessions/{id}/tabs/{tab}/navigate` | navigate |
-| `GET` | `/v1/sessions/{id}/tabs/{tab}/snapshot` | accessibility tree + refs |
-| `POST` | `/v1/sessions/{id}/tabs/{tab}/actions` | `click` or `fill` a ref |
-| `GET` | `/v1/sessions/{id}/tabs/{tab}/screenshot` | PNG of the viewport |
-| `GET` | `/v1/sessions/{id}/tabs/{tab}/persona` | observed identity report |
-| `POST/GET` | `/mcp` | Streamable HTTP MCP endpoint (when `-mcp-http` is enabled) |
+| HTTP listener | `127.0.0.1:7788` | REST and optional Streamable HTTP MCP |
+| State directory | `~/.local/share/xt-nichrome` | Profiles, generated bearer token, and transient state |
+| Egress | HTTP daemon starts with an empty allowlist. Stdio defaults to public HTTP and HTTPS when no allowlist is configured. | Use `-allow` for explicit origins. Stdio also supports `-strict-allow` to suppress its default public access. |
+| Ephemeral sessions | 4 | `-max-ephemeral` |
+| Persistent sessions | 2 | `-max-persistent` and one active lease per profile |
+| Tabs per session | 4 | `-max-tabs` |
+| Queued operations per tab | 8 | Bound on pending work for a tab |
+| Idle session eviction | 10 minutes | `-idle-timeout` · `0` disables eviction |
 
-Errors are `{"code","message","requestId","detail"}`.
+`GET /healthz` checks process liveness. `GET /readyz` reports counts, limits, and egress denials. It returns HTTP 503 when combined session capacity is exhausted. An individual pool can fill before combined capacity is reached. Both endpoints and the CLI's `health` and `ready` commands work without a bearer token.
 
-| Code | Status | Meaning |
-| --- | --- | --- |
-| `INVALID_REQUEST` | 400 | malformed body, unknown field, bad flag |
-| `UNAUTHORIZED` | 401 | missing or wrong bearer token |
-| `NOT_FOUND` | 404 | unknown session, tab or snapshot |
-| `POLICY_BLOCKED` | 403 | destination outside the allowlist |
-| `STALE_REF` | 409 | snapshot superseded or invalidated by a navigation |
-| `AMBIGUOUS_REF` | 409 | the reference matches more than one element |
-| `ELEMENT_NOT_ACTIONABLE` | 409 | right element, wrong verb (filling a checkbox) |
-| `BUSY_PROFILE` | 409 | profile already open, or the tab has queued work |
-| `CAPACITY` | 429 | session or tab quota reached |
-| `TIMEOUT` | 504 | operation exceeded its deadline |
-| `ACTION_OUTCOME_UNKNOWN` | 409 | the action was dispatched, the result was lost |
+All `/v1/*` routes and the optional `/mcp` endpoint require a bearer token. On first use, the daemon creates `<state-dir>/token` with mode `0600`. Concurrent starts that share the token path read the same persisted credential. If you use a non-default state directory, set `XT_NICHROME_STATE` for both the daemon and CLI or set each command's `-state-dir`. The daemon also accepts `-token-file`. Preserve the token file's access restrictions when provisioning one yourself. Keep the HTTP listener on loopback for local use and use TLS for remote transport.
 
-`ACTION_OUTCOME_UNKNOWN` is the important one. When a click is dispatched and the connection dies before the result is read, the service reports `status: "unknown"` rather than claiming failure — retrying a submit that may have succeeded is worse than telling the caller the truth.
-
-## Stealth & Adversarial Detection Suite
-
-The browser is a real Chromium 141.0.7390.37. Its TLS stack, HTTP/2 framing, JS engine, and rendering are untouched; the reported identity and input telemetry are aligned to a human Windows 11 desktop Chrome user. See **[docs/DETECTION.md](docs/DETECTION.md)** for the complete 28-probe adversarial benchmark (`cmd/detect-server` and `tests/detect_test.go`).
-
-| Surface / Telemetry | Stock Headless on Linux (`--headless=new`) | XT-Nichrome (`win11-chrome-141`) |
-| --- | --- | --- |
-| **Composite Suspicion Score** | `62 / 100` (`HEADLESS_LINUX_BOT`) | `0 / 100` (`HUMAN_DESKTOP_WIN11`) |
-| `navigator.userAgent` | `HeadlessChrome/141.0.7390.37` (Linux x86_64) | `Chrome/141.0.7390.37` on `Windows NT 10.0; Win64; x64` |
-| `navigator.platform` | `Linux x86_64` | `Win32` |
-| `navigator.webdriver` | `true` | `false` (native-masked prototype getter) |
-| `screen` / `outerWidth×Height` | `800×600` / `800×600` | `1920×1080` (`1920×1040` avail) / `1920×919` |
-| `(pointer: fine)` & `(hover: hover)` | `false` | `true` |
-| `Notification.permission` | `denied` | `prompt` |
-| `AudioContext.sampleRate` | `44100` / host default | `48000 Hz` |
-| WebGL1 + WebGL2 (84 params) | `Google SwiftShader` | `ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 ...)` |
-| Font families (`FONTCONFIG_FILE`) | 883 Linux families (`DejaVu Sans`, etc.) | 58 Windows families (`Segoe UI`, `Calibri`, `Consolas`, etc.); 0 Linux leaks |
-| Pointer & Keystroke Telemetry | 0 `mousemove`, 0ms dwell, `(0.5, 0.5)` center | Minimum-jerk Bézier trajectory, `18–42ms` dwell, interior triangular sampling, `screenY` chrome offset, per-key `keyDown`/`keyUp` |
-
-## Egress
-
-The browser cannot reach the network except through the policy proxy:
-
-```
---proxy-server=http://127.0.0.1:PORT
---proxy-bypass-list=<-loopback>          # loopback is proxied too
---host-resolver-rules=MAP * ~NOTFOUND,EXCLUDE 127.0.0.1
---disable-quic                            # QUIC would skip an HTTP proxy
-```
-
-Name resolution is disabled so a direct connection cannot resolve; the `EXCLUDE` is mandatory because the rule would otherwise also block the proxy's own address. WebRTC non-proxied UDP is disabled so a page cannot leak the host address around the proxy.
-
-## Sessions
-
-| Mode | Browser | Storage | Use |
-| --- | --- | --- | --- |
-| `ephemeral` | shared process, isolated context | discarded | parallel tasks, no state |
-| `persistent` | dedicated process | kept in `profiles/{id}` | logins that must survive |
-
-Default limits: 4 ephemeral sessions, 2 persistent, 4 tabs each, 8 queued operations per tab, 10-minute idle eviction.
-
-## Testing & Benchmarks
+For a persistent test session, open one with a dedicated profile ID. Use the same ID to reopen the profile after closing the session. Closing the session releases its lock and preserves the profile on disk.
 
 ```sh
-make unit    # unit + MCP server protocol tests
-make e2e     # end-to-end + adversarial detection suite against real Chromium
-make race    # race detector
-make bench   # latency against direct CDP
+./bin/nichrome-cli new-session -mode persistent -profile staging-qa -json
+# Use the returned sessionId to close the session when finished.
+./bin/nichrome-cli kill-session -session SESSION_ID
 ```
 
-Measured on this host (8 cores, Chromium 141, headless new mode), 30 runs each, same fixture page, `median` / `p95`:
+The REST JSON decoder rejects unknown fields, duplicate keys, and trailing data. The default request-body limit is 1 MiB. The endpoint reference documents the expected body and response for each verb. [REST API reference](docs/API.md)
 
-| Operation | Direct CDP | Through the service |
+### Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Daemon exits before listening | Check stderr, run `make fonts` if the pack is missing, and pass `-browser /absolute/path/to/chrome` if Chromium discovery fails. |
+| Status works but protected commands return `UNAUTHORIZED` | Confirm the CLI and daemon use the same token source, and check for an overriding `XT_NICHROME_TOKEN` in the CLI environment. |
+| Fixture navigation returns `POLICY_BLOCKED` | Confirm the exact scheme, host and port in `-allow` and use `-allow-private` for the loopback fixture. |
+| `CAPACITY` or `BUSY_PROFILE` | Inspect `ready` and `sessions`. Release unused sessions. An already leased persistent profile can be reopened after its owner closes it. |
+| Snapshot output is truncated | Check `truncated` and `refCount` in JSON output. Increase `-max-chars` or `-max-refs` within the API limits when needed. |
+| Native overlay executable is missing after `make cursor` | Run `pkg-config --exists gtk+-3.0 gtk-layer-shell-0 cairo pangocairo` and install missing development packages. |
+
+## Testing and benchmarks
+
+| Command | What it runs | Requirements |
 | --- | --- | --- |
-| cold start to first answer | 145 ms | 439 ms (session + tab + persona gate) |
-| navigate + load | 13.2 ms / 23.7 ms | 19.5 ms / 31.0 ms |
-| tree fetch vs snapshot render | 3.1 ms / 4.3 ms | 2.4 ms / 7.0 ms |
-| RSS | 203 MB (browser) | 15 MB (daemon) + browser |
+| `make fmt vet` | Go formatting check and static analysis | Go |
+| `make unit` | Command and internal package tests | Go, loopback sockets, Chromium for the browser-backed MCP test |
+| `make race` | The same package tests with the Go race detector | Go with race detector support, loopback sockets, Chromium for the browser-backed MCP test |
+| `make e2e` | End-to-end tests against a real Chromium browser | Chromium, daemon font pack, loopback sockets |
+| `make bench` | Direct CDP and daemon fixture measurements | Chromium, daemon font pack, loopback sockets |
 
-## Layout
+![Historical fixture timings in milliseconds. The dots show medians and line ends show p95. Exact values are in the table below.](docs/diagrams/fixture-latency.svg)
 
-```
-assets/               Ni (Element 28) periodic-table SVG/PNG brand assets
-cmd/nichrome          HTTP + optional /mcp daemon
-cmd/nichrome-mcp      standalone stdio MCP server
-cmd/nichrome-cli      REST client
-cmd/fixture-server    deterministic test pages
-cmd/detect-server     standalone adversarial detection & behavioral telemetry server
-internal/cdp          CDP over --remote-debugging-pipe, stdlib only
-internal/browser      process lifecycle, pages, humanized input virtualization, persona gate
-internal/stealth      persona definitions, launch flags, preload patch
-internal/sessions     session and tab lifecycle, action pipeline
-internal/snapshots    accessibility tree to refs
-internal/policy       origin allowlist, prohibited address ranges
-internal/egress       enforcing proxy (CONNECT, HTTP, WebSocket)
-internal/profiles     on-disk profile leases
-internal/fixtures     deterministic test pages
-internal/detect       adversarial fingerprinting & behavioral probe suite
-internal/mcpserver    13-tool MCP server (stdio + Streamable HTTP)
-internal/api          HTTP surface
-tests/                end-to-end & adversarial detection tests against real Chromium
-bench/                latency comparison
-deploy/               font pack builder and fontconfig template
-docs/                 MCP and detection documentation
-```
+| Operation | Direct CDP median / p95 | XT-Nichrome median / p95 |
+| --- | ---: | ---: |
+| Navigate and load | 13.2 / 23.7 ms | 19.5 / 31.0 ms |
+| Read accessibility data | 3.1 / 4.3 ms | 2.4 / 7.0 ms |
 
-## Security posture
+These values come from the repository's earlier Chromium 141 baseline on an eight-core host (`6cabe0e`), using 30 samples per navigation and accessibility loop. The accessibility rows compare a raw CDP tree fetch with a service snapshot, which return different outputs. Run `make bench` for measurements on your host. [Benchmark source](bench/bench_test.go)
 
-- Bearer token required on every `/v1` and `/mcp` HTTP route, compared in constant time.
-- The browser is never started with a remote debugging port; CDP runs over a pipe. Nothing else on the host can attach.
-- Profile directories are `0700` and the token file is held at `0600`.
-- Profile names are validated against `^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$` and resolved through `EvalSymlinks` before use.
-- Request bodies are capped at 1 MiB and decoded strictly (no unknown fields, no duplicate keys, no trailing data).
-- The browser renderer sandbox stays enabled (`--no-sandbox` is never used).
+## Repository map
+
+| Path | Responsibility |
+| --- | --- |
+| [`cmd/`](cmd/) | Daemon, MCP stdio server, CLI, companion, and fixture binaries |
+| [`internal/api/`](internal/api/) · [`internal/mcpserver/`](internal/mcpserver/) | REST and MCP adapters |
+| [`internal/sessions/`](internal/sessions/) · [`internal/snapshots/`](internal/snapshots/) · [`internal/profiles/`](internal/profiles/) | Leases, tab queues, accessibility handles, and profile storage |
+| [`internal/browser/`](internal/browser/) · [`internal/cdp/`](internal/cdp/) | Chromium process and DevTools transport |
+| [`internal/policy/`](internal/policy/) · [`internal/egress/`](internal/egress/) | Origin policy and outbound proxy |
+| [`internal/companion/`](internal/companion/) | Ni-Cursor overlay control and selection handling |
+| [`tests/`](tests/) · [`bench/`](bench/) | Browser integration tests and fixture benchmarks |
+| [`docs/`](docs/) · [`assets/`](assets/) | Reference docs, diagrams, and the Ni-28 brand assets |

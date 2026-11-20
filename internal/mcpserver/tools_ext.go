@@ -198,6 +198,28 @@ type CompanionSelectionInput struct {
 	Y           *float64 `json:"y,omitempty" jsonschema:"optional target Y coordinate when guide=true"`
 }
 
+// FindInput is the input for browser_find.
+type FindInput struct {
+	SessionID      string `json:"sessionId,omitempty" jsonschema:"session ID (defaults to active session)"`
+	TabID          string `json:"tabId,omitempty" jsonschema:"tab ID (defaults to active tab)"`
+	Query          string `json:"query,omitempty" jsonschema:"case-insensitive substring to match against element name, role, tag, or @eN ref"`
+	Role           string `json:"role,omitempty" jsonschema:"optional accessibility role filter, e.g. button, textbox, link, combobox, checkbox"`
+	ActionableOnly bool   `json:"actionableOnly,omitempty" jsonschema:"when true, return only actionable elements"`
+	Limit          int    `json:"limit,omitempty" jsonschema:"maximum number of matched @eN refs to return (default 25, max 200)"`
+}
+
+// EmulateInput is the input for browser_emulate.
+type EmulateInput struct {
+	SessionID         string  `json:"sessionId,omitempty" jsonschema:"session ID (defaults to active session)"`
+	TabID             string  `json:"tabId,omitempty" jsonschema:"tab ID (defaults to active tab)"`
+	ViewportWidth     int     `json:"viewportWidth,omitempty" jsonschema:"optional viewport width in CSS pixels (200..7680)"`
+	ViewportHeight    int     `json:"viewportHeight,omitempty" jsonschema:"optional viewport height in CSS pixels (200..4320)"`
+	DeviceScaleFactor float64 `json:"deviceScaleFactor,omitempty" jsonschema:"optional device pixel ratio (0.25..4.0)"`
+	ColorScheme       string  `json:"colorScheme,omitempty" jsonschema:"optional prefers-color-scheme media override: dark, light, or no-preference"`
+	ReducedMotion     string  `json:"reducedMotion,omitempty" jsonschema:"optional prefers-reduced-motion media override: reduce or no-preference"`
+	Offline           *bool   `json:"offline,omitempty" jsonschema:"optional network offline emulation toggle"`
+}
+
 func (s *Server) registerExtendedTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "browser_hover",
@@ -313,6 +335,17 @@ func (s *Server) registerExtendedTools() {
 		Description: "Analyze highlighted/selected text (or read live Wayland primary selection via readPrimary=true) from Discord, browser, or terminal, " +
 			"classify tone/intent or decode base64/hex/timestamps, and optionally pop up Ni-Cursor with a real-time reply.",
 	}, s.handleCompanionSelection)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name: "browser_find",
+		Description: "Search the active tab's accessibility snapshot for @eN elements by substring query and/or role (e.g. 'button', 'textbox', 'link'), " +
+			"automatically capturing a fresh snapshot if needed and remembering snapshotId for immediate interaction.",
+	}, s.handleFind)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "browser_emulate",
+		Description: "Dynamically adjust viewport dimensions (width, height, deviceScaleFactor), prefers-color-scheme ('dark'|'light'), prefers-reduced-motion, or offline network state on the active tab.",
+	}, s.handleEmulate)
 }
 
 func (s *Server) handleHover(ctx context.Context, req *mcp.CallToolRequest, in HoverInput) (*mcp.CallToolResult, ActionOutput, error) {
@@ -722,6 +755,47 @@ func (s *Server) handleCompanionSelection(ctx context.Context, _ *mcp.CallToolRe
 	})
 	if apiErr != nil {
 		return nil, types.SelectionAnalysis{}, FormatError(apiErr)
+	}
+	return nil, *res, nil
+}
+
+func (s *Server) handleFind(ctx context.Context, req *mcp.CallToolRequest, in FindInput) (*mcp.CallToolResult, types.FindResult, error) {
+	sid, tid, apiErr := s.resolveSessionAndTab(req, in.SessionID, in.TabID)
+	if apiErr != nil {
+		return nil, types.FindResult{}, FormatError(apiErr)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	res, apiErr := s.cfg.Manager.Find(ctx, sid, tid, types.FindRequest{
+		Query:          in.Query,
+		Role:           in.Role,
+		ActionableOnly: in.ActionableOnly,
+		Limit:          in.Limit,
+	})
+	if apiErr != nil {
+		return nil, types.FindResult{}, FormatError(apiErr)
+	}
+	s.rememberSnapshot(req, sid, tid, res.SnapshotID)
+	return nil, *res, nil
+}
+
+func (s *Server) handleEmulate(ctx context.Context, req *mcp.CallToolRequest, in EmulateInput) (*mcp.CallToolResult, types.EmulateResult, error) {
+	sid, tid, apiErr := s.resolveSessionAndTab(req, in.SessionID, in.TabID)
+	if apiErr != nil {
+		return nil, types.EmulateResult{}, FormatError(apiErr)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	res, apiErr := s.cfg.Manager.Emulate(ctx, sid, tid, types.EmulateRequest{
+		ViewportWidth:     in.ViewportWidth,
+		ViewportHeight:    in.ViewportHeight,
+		DeviceScaleFactor: in.DeviceScaleFactor,
+		ColorScheme:       in.ColorScheme,
+		ReducedMotion:     in.ReducedMotion,
+		Offline:           in.Offline,
+	})
+	if apiErr != nil {
+		return nil, types.EmulateResult{}, FormatError(apiErr)
 	}
 	return nil, *res, nil
 }

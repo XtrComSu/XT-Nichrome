@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(flag.CommandLine, os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "nichrome-cli: %v\n", err)
 		os.Exit(1)
 	}
@@ -32,32 +32,37 @@ type client struct {
 	json  bool
 }
 
-func run() error {
+func run(flags *flag.FlagSet, args []string) error {
 	var (
-		base      = flag.String("url", envOr("XT_NICHROME_URL", "http://127.0.0.1:7788"), "service base URL")
-		tokenFile = flag.String("token-file", "", "file holding the bearer token")
-		stateDir  = flag.String("state-dir", defaultStateDir(), "state directory holding the token")
-		timeout   = flag.Duration("timeout", 120*time.Second, "per-request timeout")
-		asJSON    = flag.Bool("json", false, "print raw JSON")
+		base      = flags.String("url", envOr("XT_NICHROME_URL", "http://127.0.0.1:7788"), "service base URL")
+		tokenFile = flags.String("token-file", "", "file holding the bearer token")
+		stateDir  = flags.String("state-dir", defaultStateDir(), "state directory holding the token")
+		timeout   = flags.Duration("timeout", 120*time.Second, "per-request timeout")
+		asJSON    = flags.Bool("json", false, "print raw JSON")
 	)
-	flag.Usage = usage
-	flag.Parse()
-
-	if flag.NArg() == 0 {
+	flags.Usage = usage
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() == 0 {
 		usage()
 		return errors.New("a command is required")
 	}
-	token, err := loadToken(*tokenFile, *stateDir)
-	if err != nil {
-		return err
-	}
+
+	command := flags.Arg(0)
 	c := &client{
-		base:  strings.TrimRight(*base, "/"),
-		token: token,
-		http:  &http.Client{Timeout: *timeout},
-		json:  *asJSON,
+		base: strings.TrimRight(*base, "/"),
+		http: &http.Client{Timeout: *timeout},
+		json: *asJSON,
 	}
-	return dispatch(c, flag.Arg(0), flag.Args()[1:])
+	if command != "health" && command != "ready" {
+		token, err := loadToken(*tokenFile, *stateDir)
+		if err != nil {
+			return err
+		}
+		c.token = token
+	}
+	return dispatch(c, command, flags.Args()[1:])
 }
 
 // cmdFlags holds the flags every resource command accepts. Registering them per
@@ -241,7 +246,7 @@ func dispatch(c *client, cmd string, args []string) error {
 	case "close-tab", "persona", "screenshot", "pdf", "go", "click", "fill",
 		"hover", "scroll", "press", "select", "check", "uncheck", "drag", "upload",
 		"back", "forward", "reload", "wait", "extract", "telemetry", "cookies",
-		"eval", "storage", "dialogs":
+		"eval", "storage", "dialogs", "find", "emulate":
 		cf, err := newCmd(cmd, args, cmdOpts{session: true, tab: true, wantArgs: true})
 		if err != nil {
 			return err
@@ -261,6 +266,24 @@ func dispatch(c *client, cmd string, args []string) error {
 			return c.get(base + "/extract")
 		case "telemetry":
 			return c.get(base + "/telemetry")
+		case "find":
+			q := ""
+			if len(rest) > 0 {
+				q = strings.Join(rest, " ")
+			}
+			return c.post(base+"/find", map[string]any{"query": q})
+		case "emulate":
+			if len(rest) == 1 && (rest[0] == "dark" || rest[0] == "light" || rest[0] == "no-preference") {
+				return c.post(base+"/emulate", map[string]any{"colorScheme": rest[0]})
+			}
+			if len(rest) >= 2 {
+				w, err1 := strconv.Atoi(rest[0])
+				h, err2 := strconv.Atoi(rest[1])
+				if err1 == nil && err2 == nil {
+					return c.post(base+"/emulate", map[string]any{"viewportWidth": w, "viewportHeight": h})
+				}
+			}
+			return errors.New("usage: emulate -session S -tab T (dark|light | WIDTH HEIGHT)")
 		case "dialogs":
 			if len(rest) > 0 && (rest[0] == "accept" || rest[0] == "dismiss") {
 				acc := rest[0] == "accept"
@@ -450,7 +473,9 @@ func (c *client) do(method, path string, body any) (*http.Response, error) {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot reach %s: %w", c.base, err)
@@ -602,7 +627,7 @@ func usage() {
 Usage:
   nichrome-cli [global flags] COMMAND [flags] [args]
 
-Global flags (accepted before or after the command):
+Global flags (place before the command, except -json may also follow it):
   -url URL           service base URL (default %s)
   -token-file PATH   bearer token file
   -state-dir DIR     state directory holding the token
@@ -610,20 +635,40 @@ Global flags (accepted before or after the command):
   -json              print raw JSON
 
 Commands:
-  health                                   liveness
-  ready                                    readiness, capacity and egress state
-  sessions                                 list sessions
-  new-session [-mode m] [-profile p]       create a session
-  kill-session -session S                  destroy a session
-  tabs -session S                          list tabs
-  new-tab -session S [URL]                 open a tab
-  close-tab -session S -tab T              close a tab
-  go -session S -tab T URL                 navigate
+  health                                        liveness
+  ready                                         readiness, capacity and egress state
+  sessions                                      list sessions
+  new-session [-mode m] [-profile p] [-persona] create a session
+  kill-session -session S                       destroy a session
+  tabs -session S                               list tabs
+  new-tab -session S [URL]                      open a tab
+  close-tab -session S -tab T                   close a tab
+  go -session S -tab T URL                      navigate to allowlisted URL
+  back|forward|reload -session S -tab T         session history navigation
+  wait -session S -tab T TEXT                   wait for visible text
   snapshot -session S -tab T [-max-chars n] [-max-refs n] [-values]
-  click -session S -tab T SNAPSHOT REF     click a referenced element
-  fill -session S -tab T SNAPSHOT REF TXT  fill a referenced field
-  persona -session S -tab T                report the observed identity
-  screenshot -session S -tab T [FILE]      save a PNG
+  find -session S -tab T [QUERY]                find @eN elements by query
+  extract -session S -tab T                     extract clean text, headings & links
+  click -session S -tab T SNAPSHOT REF          humanized click on @eN
+  fill -session S -tab T SNAPSHOT REF TXT       humanized per-key typing into @eN
+  hover -session S -tab T SNAPSHOT REF          humanized hover on @eN
+  scroll -session S -tab T [DIR] [AMOUNT]       momentum mouse-wheel scroll
+  press -session S -tab T [SNAPSHOT REF] KEY    press key or chord (Enter, Control+a)
+  select -session S -tab T SNAPSHOT REF VAL     select option in <select>
+  check|uncheck -session S -tab T SNAPSHOT REF  idempotent checkbox/switch toggle
+  drag -session S -tab T SNAPSHOT SRC DST       humanized drag-and-drop
+  upload -session S -tab T SNAPSHOT REF FILE..  attach file(s) to <input type=file>
+  eval -session S -tab T [SNAPSHOT REF] EXPR    evaluate JS expression or el => ...
+  storage -session S -tab T [clear]             inspect or clear localStorage
+  cookies -session S -tab T [clear]             inspect or clear cookies
+  dialogs -session S -tab T [accept|dismiss]    inspect or configure JS dialogs
+  emulate -session S -tab T (dark|light|W H)    emulate viewport or color scheme
+  telemetry -session S -tab T                   console, network & dialog ring buffers
+  persona -session S -tab T                     report observed stealth identity
+  screenshot -session S -tab T [FILE]           save viewport PNG
+  pdf -session S -tab T [FILE]                  save rendered PDF
+  companion [status|show|hide|clear|MSG]        control or guide Ni-Cursor
+  companion-select [TEXT]                       analyze highlighted text / primary selection
 
 Environment:
   XT_NICHROME_URL      base URL

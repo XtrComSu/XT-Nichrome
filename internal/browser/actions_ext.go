@@ -966,6 +966,101 @@ func (p *Page) Storage(ctx context.Context, req types.StorageRequest) (*types.St
 	}, nil
 }
 
+// Emulate dynamically updates viewport dimensions, CSS prefers-color-scheme,
+// prefers-reduced-motion, or offline network state on the active tab while
+// preserving the persona's OS/WebGL identity.
+func (p *Page) Emulate(ctx context.Context, req types.EmulateRequest) (*types.EmulateResult, *types.APIError) {
+	per := p.proc.persona
+	vw := req.ViewportWidth
+	if vw <= 0 {
+		vw = per.ViewportWidth
+	}
+	vh := req.ViewportHeight
+	if vh <= 0 {
+		vh = per.ViewportHeight
+	}
+	dsf := req.DeviceScaleFactor
+	if dsf <= 0 {
+		dsf = per.DeviceScaleFactor
+	}
+	if vw < 200 || vw > 7680 || vh < 200 || vh > 4320 || dsf < 0.25 || dsf > 4.0 {
+		return nil, &types.APIError{
+			Code:    types.CodeInvalidRequest,
+			Message: "viewport dimensions must be between 200x200 and 7680x4320 with deviceScaleFactor 0.25..4.0",
+		}
+	}
+
+	if req.ViewportWidth > 0 || req.ViewportHeight > 0 || req.DeviceScaleFactor > 0 {
+		if err := p.Call(ctx, "Emulation.setDeviceMetricsOverride", map[string]any{
+			"width":              vw,
+			"height":             vh,
+			"deviceScaleFactor":  dsf,
+			"mobile":             false,
+			"screenWidth":        per.ScreenWidth,
+			"screenHeight":       per.ScreenHeight,
+			"positionX":          0,
+			"positionY":          0,
+			"dontSetVisibleSize": false,
+		}, nil); err != nil {
+			return nil, browserError(err)
+		}
+	}
+
+	var features []map[string]string
+	cs := strings.ToLower(strings.TrimSpace(req.ColorScheme))
+	if cs != "" {
+		if cs != "dark" && cs != "light" && cs != "no-preference" {
+			return nil, &types.APIError{
+				Code:    types.CodeInvalidRequest,
+				Message: "colorScheme must be dark, light, or no-preference",
+				Detail:  map[string]any{"field": "colorScheme"},
+			}
+		}
+		features = append(features, map[string]string{"name": "prefers-color-scheme", "value": cs})
+	}
+	rm := strings.ToLower(strings.TrimSpace(req.ReducedMotion))
+	if rm != "" {
+		if rm != "reduce" && rm != "no-preference" {
+			return nil, &types.APIError{
+				Code:    types.CodeInvalidRequest,
+				Message: "reducedMotion must be reduce or no-preference",
+				Detail:  map[string]any{"field": "reducedMotion"},
+			}
+		}
+		features = append(features, map[string]string{"name": "prefers-reduced-motion", "value": rm})
+	}
+	if len(features) > 0 {
+		if err := p.Call(ctx, "Emulation.setEmulatedMedia", map[string]any{
+			"features": features,
+		}, nil); err != nil {
+			return nil, browserError(err)
+		}
+	}
+
+	offline := false
+	if req.Offline != nil {
+		offline = *req.Offline
+		if err := p.Call(ctx, "Network.emulateNetworkConditions", map[string]any{
+			"offline":            offline,
+			"latency":            float64(per.ConnectionRTT),
+			"downloadThroughput": float64(per.ConnectionDownlink) * 125000,
+			"uploadThroughput":   float64(per.ConnectionDownlink) * 62500,
+		}, nil); err != nil {
+			return nil, browserError(err)
+		}
+	}
+
+	return &types.EmulateResult{
+		Status:            types.StatusOK,
+		ViewportWidth:     vw,
+		ViewportHeight:    vh,
+		DeviceScaleFactor: dsf,
+		ColorScheme:       cs,
+		ReducedMotion:     rm,
+		Offline:           offline,
+	}, nil
+}
+
 func (p *Page) recordConsoleEvent(params json.RawMessage) {
 	var ev struct {
 		Type string `json:"type"`

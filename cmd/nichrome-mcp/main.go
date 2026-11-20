@@ -43,6 +43,8 @@ type options struct {
 	persona      string
 	stateDir     string
 	allow        string
+	allowPublic  bool
+	strictAllow  bool
 	allowPrivate bool
 	logLevel     string
 	idle         time.Duration
@@ -58,7 +60,9 @@ func run() error {
 	flag.BoolVar(&opt.headless, "headless", true, "run the browser headless (new headless mode)")
 	flag.StringVar(&opt.persona, "persona", "win11-chrome-141", "stealth persona name")
 	flag.StringVar(&opt.stateDir, "state-dir", defaultStateDir(), "state directory (profiles, font config)")
-	flag.StringVar(&opt.allow, "allow", os.Getenv("XT_NICHROME_ALLOW"), "comma-separated allowed origins, e.g. https://a.test,https://b.test")
+	flag.StringVar(&opt.allow, "allow", os.Getenv("XT_NICHROME_ALLOW"), "comma-separated allowed origins (or '*' for public web; omit for public web with SSRF guard)")
+	flag.BoolVar(&opt.allowPublic, "allow-public", os.Getenv("XT_NICHROME_ALLOW_PUBLIC") == "1", "permit any public http/https origin on ports 80/443 while blocking private/loopback/metadata IPs")
+	flag.BoolVar(&opt.strictAllow, "strict-allow", false, "require explicit -allow origins even when -allow is empty")
 	flag.BoolVar(&opt.allowPrivate, "allow-private", false, "permit requests to loopback addresses")
 	flag.StringVar(&opt.logLevel, "log-level", "warn", "debug|info|warn|error (logged to stderr)")
 	flag.DurationVar(&opt.idle, "idle-timeout", 10*time.Minute, "evict sessions idle for this long (0 disables)")
@@ -96,10 +100,11 @@ func run() error {
 	fontConf := filepath.Join(stateDir, "fonts.conf")
 	fontCache := filepath.Join(stateDir, "fontcache")
 	if err := writeFontConfIfNeeded(fontConf, fontCache, opt.fontsDir); err != nil {
-		return err
+		logger.Warn("font pack not ready; starting with system fontconfig fallback (run 'make fonts' for full Windows font isolation)", "err", err)
+		fontConf = ""
 	}
 
-	pol, err := buildPolicy(opt.allow, opt.allowPrivate)
+	pol, err := buildPolicy(opt.allow, opt.allowPublic, opt.strictAllow, opt.allowPrivate)
 	if err != nil {
 		return err
 	}
@@ -208,16 +213,28 @@ func tightenDir(path string) error {
 	return os.Chmod(path, 0o700)
 }
 
-func buildPolicy(allow string, allowPrivate bool) (*policy.Policy, error) {
+func buildPolicy(allow string, allowPublic, strictAllow, allowPrivate bool) (*policy.Policy, error) {
 	var specs []string
+	wildcard := false
 	for _, part := range strings.Split(allow, ",") {
 		p := strings.TrimSpace(part)
 		if p == "" {
 			continue
 		}
+		if p == "*" {
+			wildcard = true
+			continue
+		}
 		specs = append(specs, p)
 	}
-	return policy.New(specs, allowPrivate)
+	pol, err := policy.New(specs, allowPrivate)
+	if err != nil {
+		return nil, err
+	}
+	if allowPublic || wildcard || (len(specs) == 0 && !strictAllow) {
+		pol.SetAllowPublic(true)
+	}
+	return pol, nil
 }
 
 func writeFontConfIfNeeded(path, cacheDir, fontsDir string) error {

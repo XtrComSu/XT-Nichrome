@@ -77,12 +77,16 @@ func ParseRule(spec string) (Rule, error) {
 	return Rule{Scheme: scheme, Host: host, Port: port}, nil
 }
 
-// Policy is an immutable set of rules plus a private-address switch.
+// Policy is an immutable set of rules plus private-address and public-web switches.
 type Policy struct {
 	rules []Rule
 	// allowPrivate is on for fixtures. Production deployments set it false so
 	// the egress boundary refuses loopback/RFC1918 destinations.
 	allowPrivate bool
+	// allowPublic permits any public http/https origin on standard ports (80/443)
+	// while still enforcing CheckIPs SSRF blocks against RFC1918, loopback,
+	// link-local/metadata, and multicast ranges.
+	allowPublic bool
 }
 
 // New builds a policy from origin specs.
@@ -112,6 +116,13 @@ func (p *Policy) Rules() []Rule { return append([]Rule(nil), p.rules...) }
 
 // AllowPrivate reports whether private destinations are permitted (fixtures).
 func (p *Policy) AllowPrivate() bool { return p.allowPrivate }
+
+// SetAllowPublic enables or disables public web origin admission (ports 80/443)
+// while keeping CheckIPs SSRF protection active.
+func (p *Policy) SetAllowPublic(v bool) { p.allowPublic = v }
+
+// AllowPublic reports whether public web origins are admitted.
+func (p *Policy) AllowPublic() bool { return p.allowPublic }
 
 // AdmitURL validates a caller-supplied URL for admission (brief §6): a real
 // URL parser, no embedded credentials, http(s) only, and an authorized origin.
@@ -150,6 +161,9 @@ func (p *Policy) AdmitURL(raw string) (*url.URL, *types.APIError) {
 }
 
 func (p *Policy) originAllowed(scheme, host string, port int) bool {
+	if p.allowPublic && ((scheme == "http" && port == 80) || (scheme == "https" && port == 443)) {
+		return true
+	}
 	for _, r := range p.rules {
 		if r.Host != host {
 			continue
@@ -189,6 +203,9 @@ type EgressDecision struct {
 // CheckIPs; this function only handles origin policy.
 func (p *Policy) CheckEgress(host string, port int) EgressDecision {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if p.allowPublic && (port == 80 || port == 443) {
+		return EgressDecision{Allowed: true}
+	}
 	scheme := "http"
 	if port == 443 {
 		scheme = "https"

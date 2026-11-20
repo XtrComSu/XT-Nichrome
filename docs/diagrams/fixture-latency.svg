@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="382" viewBox="0 0 880 382" role="img" aria-labelledby="title desc">
+  <title id="title">XT-Nichrome recorded fixture latency</title>
+  <desc id="desc">Historical median and 95th-percentile times in milliseconds. Navigation: direct CDP 13.2 and 23.7, XT-Nichrome 19.5 and 31.0. Accessibility read: direct CDP tree 3.1 and 4.3, XT-Nichrome snapshot 2.4 and 7.0.</desc>
+  <path d="M17 1h838l24 24v340l-16 16H1V17z" fill="#0A0A0A" stroke="#454545"/>
+  <path d="M17 1h104v3H15z" fill="#FF2E2E"/>
+  <g font-family="monospace">
+    <text x="32" y="39" fill="#FF5656" font-size="16" font-weight="bold">Ni / 28</text>
+    <text x="127" y="39" fill="#E8E6E3" font-size="18" font-weight="bold">Recorded fixture latency</text>
+    <g font-size="13" fill="#A1A1AA">
+      <text x="32" y="68">Chromium 141 / 30 samples per loop / milliseconds</text>
+      <text x="635" y="68">Line end = p95</text>
+      <text x="635" y="88">Dot = median</text>
+    </g>
+    <path d="M250 124v179m80-179v179m80-179v179m80-179v179m80-179v179m80-179v179m80-179v179m80-179v179" stroke="#353535"/>
+    <g fill="#E8E6E3" font-weight="bold" font-size="15">
+      <text x="32" y="121">Navigate + load</text>
+      <text x="32" y="221">Accessibility read</text>
+    </g>
+    <g fill="#A1A1AA" font-size="13">
+      <text x="32" y="156">Direct CDP</text>
+      <text x="32" y="186">XT-Nichrome</text>
+      <text x="32" y="256">Direct CDP tree</text>
+      <text x="32" y="286">XT-Nichrome snapshot</text>
+      <text x="250" y="329" text-anchor="middle">0</text>
+      <text x="330" y="329" text-anchor="middle">5</text>
+      <text x="410" y="329" text-anchor="middle">10</text>
+      <text x="490" y="329" text-anchor="middle">15</text>
+      <text x="570" y="329" text-anchor="middle">20</text>
+      <text x="650" y="329" text-anchor="middle">25</text>
+      <text x="730" y="329" text-anchor="middle">30</text>
+      <text x="810" y="329" text-anchor="middle">35 ms</text>
+    </g>
+  </g>
+  <g stroke-width="4" fill="none">
+    <path d="M250 151H629.2m0-6v12M250 251H318.8m0-6v12" stroke="#A1A1AA"/>
+    <path d="M250 181H746m0-6v12M250 281H362m0-6v12" stroke="#FF2E2E"/>
+  </g>
+  <g stroke="#0A0A0A" stroke-width="2">
+    <circle cx="461.2" cy="151" r="6" fill="#E8E6E3"/>
+    <circle cx="562" cy="181" r="6" fill="#FF5656"/>
+    <circle cx="299.6" cy="251" r="6" fill="#E8E6E3"/>
+    <circle cx="288.4" cy="281" r="6" fill="#FF5656"/>
+  </g>
+</svg>

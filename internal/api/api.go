@@ -101,6 +101,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /v1/sessions/{id}/tabs/{tab}/storage", s.auth(s.handleClearStorage))
 	s.mux.HandleFunc("GET /v1/sessions/{id}/tabs/{tab}/dialogs", s.auth(s.handleGetDialogs))
 	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/dialogs", s.auth(s.handlePostDialogs))
+	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/find", s.auth(s.handleFind))
+	s.mux.HandleFunc("POST /v1/sessions/{id}/tabs/{tab}/emulate", s.auth(s.handleEmulate))
 
 	s.mux.HandleFunc("GET /v1/companion", s.auth(s.handleGetCompanion))
 	s.mux.HandleFunc("POST /v1/companion", s.auth(s.handlePostCompanion))
@@ -628,6 +630,38 @@ func (s *Server) handlePostDialogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, apiErr := s.cfg.Manager.Dialogs(r.Context(), r.PathValue("id"), r.PathValue("tab"), &req)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleFind(w http.ResponseWriter, r *http.Request) {
+	var req types.FindRequest
+	if apiErr := decodeJSON(r, &req, s.cfg.MaxBodyBytes, true); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.Find(ctx, r.PathValue("id"), r.PathValue("tab"), req)
+	if apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleEmulate(w http.ResponseWriter, r *http.Request) {
+	var req types.EmulateRequest
+	if apiErr := decodeJSON(r, &req, s.cfg.MaxBodyBytes, false); apiErr != nil {
+		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	out, apiErr := s.cfg.Manager.Emulate(ctx, r.PathValue("id"), r.PathValue("tab"), req)
 	if apiErr != nil {
 		writeError(w, apiErr.WithRequestID(requestIDOf(r.Context())))
 		return

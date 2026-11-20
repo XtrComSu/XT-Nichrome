@@ -46,6 +46,7 @@ type options struct {
 	persona      string
 	stateDir     string
 	allow        string
+	allowPublic  bool
 	allowPrivate bool
 	token        string
 	tokenFile    string
@@ -66,7 +67,8 @@ func run() error {
 	flag.BoolVar(&opt.headless, "headless", true, "run the browser headless (new headless mode)")
 	flag.StringVar(&opt.persona, "persona", "win11-chrome-141", "stealth persona name")
 	flag.StringVar(&opt.stateDir, "state-dir", defaultStateDir(), "state directory (profiles, font config)")
-	flag.StringVar(&opt.allow, "allow", "", "comma-separated allowed origins, e.g. https://a.test,https://b.test")
+	flag.StringVar(&opt.allow, "allow", "", "comma-separated allowed origins, e.g. https://a.test,https://b.test (or '*' for public web)")
+	flag.BoolVar(&opt.allowPublic, "allow-public", false, "permit any public http/https origin on ports 80/443 while blocking private/loopback/metadata IPs")
 	flag.BoolVar(&opt.allowPrivate, "allow-private", false, "permit requests to private/loopback addresses")
 	flag.StringVar(&opt.token, "token", "", "bearer token (default: read or create in the state dir)")
 	flag.StringVar(&opt.tokenFile, "token-file", "", "file holding the bearer token")
@@ -138,7 +140,7 @@ func run() error {
 	// there is no configuration in which it reaches the network on its own. The
 	// session manager enforces this too, which is why there is no "off" switch to
 	// get wrong.
-	pol, err := buildPolicy(opt.allow, opt.allowPrivate)
+	pol, err := buildPolicy(opt.allow, opt.allowPublic, opt.allowPrivate)
 	if err != nil {
 		return err
 	}
@@ -288,29 +290,51 @@ func loadOrCreateToken(stateDir, tokenFile, explicit string) (string, error) {
 	if tokenFile == "" {
 		tokenFile = filepath.Join(stateDir, "token")
 	}
-	data, err := os.ReadFile(tokenFile)
-	if err == nil {
-		tok := strings.TrimSpace(string(data))
-		if len(tok) >= 16 {
-			return tok, nil
+	token, err := readToken(tokenFile)
+	if !errors.Is(err, os.ErrNotExist) {
+		return token, err
+	}
+
+	var entropy [32]byte
+	if _, err := rand.Read(entropy[:]); err != nil {
+		return "", err
+	}
+	token = hex.EncodeToString(entropy[:])
+	dir := filepath.Dir(tokenFile)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	temp, err := os.CreateTemp(dir, ".nichrome-token-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(temp.Name())
+
+	_, writeErr := temp.WriteString(token + "\n")
+	if err := errors.Join(writeErr, temp.Close()); err != nil {
+		return "", err
+	}
+	// Publish the completed file without replacing a token installed by
+	// another daemon or a simultaneous -print-token invocation.
+	if err := os.Link(temp.Name(), tokenFile); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return readToken(tokenFile)
 		}
-		return "", fmt.Errorf("token file %s does not contain a usable token", tokenFile)
-	}
-	if !os.IsNotExist(err) {
 		return "", err
 	}
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	return token, nil
+}
+
+func readToken(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return "", err
 	}
-	tok := hex.EncodeToString(b[:])
-	if err := os.MkdirAll(filepath.Dir(tokenFile), 0o700); err != nil {
-		return "", err
+	token := strings.TrimSpace(string(data))
+	if len(token) < 16 {
+		return "", fmt.Errorf("token file %s does not contain a usable token", path)
 	}
-	if err := os.WriteFile(tokenFile, []byte(tok+"\n"), 0o600); err != nil {
-		return "", err
-	}
-	return tok, nil
+	return token, nil
 }
 
 // tightenDir removes group and other permissions from an existing directory.
@@ -325,16 +349,28 @@ func tightenDir(path string) error {
 	return os.Chmod(path, 0o700)
 }
 
-func buildPolicy(allow string, allowPrivate bool) (*policy.Policy, error) {
+func buildPolicy(allow string, allowPublic, allowPrivate bool) (*policy.Policy, error) {
 	var specs []string
+	wildcard := false
 	for _, part := range strings.Split(allow, ",") {
 		p := strings.TrimSpace(part)
 		if p == "" {
 			continue
 		}
+		if p == "*" {
+			wildcard = true
+			continue
+		}
 		specs = append(specs, p)
 	}
-	return policy.New(specs, allowPrivate)
+	pol, err := policy.New(specs, allowPrivate)
+	if err != nil {
+		return nil, err
+	}
+	if allowPublic || wildcard {
+		pol.SetAllowPublic(true)
+	}
+	return pol, nil
 }
 
 func writeFontConfIfNeeded(path, cacheDir, fontsDir string) error {

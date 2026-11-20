@@ -335,6 +335,54 @@ type StorageResult struct {
 	Entries map[string]string `json:"entries"`
 }
 
+// FindRequest is POST .../find.
+type FindRequest struct {
+	Query          string `json:"query,omitempty"`
+	Role           string `json:"role,omitempty"`
+	ActionableOnly bool   `json:"actionableOnly,omitempty"`
+	Limit          int    `json:"limit,omitempty"`
+}
+
+// FoundRef is one matched @eN element reference from Find.
+type FoundRef struct {
+	Ref        string   `json:"ref"`
+	Role       string   `json:"role"`
+	Name       string   `json:"name,omitempty"`
+	Tag        string   `json:"tag,omitempty"`
+	Actionable bool     `json:"actionable"`
+	States     []string `json:"states,omitempty"`
+}
+
+// FindResult is the response from POST .../find.
+type FindResult struct {
+	SnapshotID string     `json:"snapshotId"`
+	Generation int64      `json:"generation"`
+	URL        string     `json:"url"`
+	TotalRefs  int        `json:"totalRefs"`
+	Matches    []FoundRef `json:"matches"`
+}
+
+// EmulateRequest is POST .../emulate.
+type EmulateRequest struct {
+	ViewportWidth     int     `json:"viewportWidth,omitempty"`
+	ViewportHeight    int     `json:"viewportHeight,omitempty"`
+	DeviceScaleFactor float64 `json:"deviceScaleFactor,omitempty"`
+	ColorScheme       string  `json:"colorScheme,omitempty"`   // "dark" | "light" | "no-preference"
+	ReducedMotion     string  `json:"reducedMotion,omitempty"` // "reduce" | "no-preference"
+	Offline           *bool   `json:"offline,omitempty"`
+}
+
+// EmulateResult is the response from POST .../emulate.
+type EmulateResult struct {
+	Status            string  `json:"status"`
+	ViewportWidth     int     `json:"viewportWidth"`
+	ViewportHeight    int     `json:"viewportHeight"`
+	DeviceScaleFactor float64 `json:"deviceScaleFactor"`
+	ColorScheme       string  `json:"colorScheme,omitempty"`
+	ReducedMotion     string  `json:"reducedMotion,omitempty"`
+	Offline           bool    `json:"offline"`
+}
+
 // SelectionRequest analyzes highlighted/selected text (or reads Wayland primary selection)
 // and optionally activates the 2nd companion cursor ("Ni-Cursor") with a real-time reply.
 type SelectionRequest struct {

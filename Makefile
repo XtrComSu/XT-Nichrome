@@ -49,14 +49,14 @@ vet: ## Static analysis
 fmt: ## Check formatting
 	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "unformatted:"; echo "$$out"; exit 1; fi
 
-unit: ## Unit tests (no browser)
-	$(GO) test ./internal/... -count=1
+unit: ## Command and internal package tests
+	$(GO) test ./cmd/... ./internal/... -count=1
 
 e2e: build fixture detect ## End-to-end tests against real Chromium
 	XT_NICHROME_BROWSER=$(BROWSER) $(GO) test ./tests/ -count=1 -v -timeout 20m
 
-race: ## Race detector over the package tests and the daemon package
-	$(GO) test -race ./internal/... -count=1
+race: ## Race detector over command and internal package tests
+	$(GO) test -race ./cmd/... ./internal/... -count=1
 
 bench: ## Benchmark against direct CDP
 	XT_BENCH_SERVICE=1 $(GO) test ./bench/ -count=1 -v -timeout 20m

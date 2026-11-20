@@ -44,7 +44,7 @@ type Page struct {
 	lastAction time.Time
 	// inflight tracks a dispatched side-effecting action so a client disconnect
 	// cannot turn into a duplicate submission.
-	inflight   bool
+	inflight         bool
 	cursorX          float64
 	cursorY          float64
 	cursorInit       bool

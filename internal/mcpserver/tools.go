@@ -264,6 +264,7 @@ func (s *Server) registerTools() {
 	}, s.handleReady)
 
 	s.registerExtendedTools()
+	s.registerResourcesAndPrompts()
 }
 
 func (s *Server) handleOpenSession(ctx context.Context, req *mcp.CallToolRequest, in OpenSessionInput) (*mcp.CallToolResult, OpenSessionOutput, error) {

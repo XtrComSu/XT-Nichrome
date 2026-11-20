@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -742,6 +744,103 @@ func (m *Manager) Dialogs(ctx context.Context, sessionID, tabID string, req *typ
 	out := t.page.Dialogs(req)
 	s.touch(m.cfg.Now())
 	return &out, nil
+}
+
+// Find searches the active tab's accessibility snapshot for @eN elements
+// matching a substring query and/or role, automatically taking a fresh snapshot
+// if the tab does not have one at the current document generation.
+func (m *Manager) Find(ctx context.Context, sessionID, tabID string, req types.FindRequest) (*types.FindResult, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	cur := t.snapshots.Current(tabID)
+	if cur == nil || cur.Generation != t.page.Generation() {
+		if _, apiErr := m.Snapshot(ctx, sessionID, tabID, types.SnapshotRequest{}); apiErr != nil {
+			return nil, apiErr
+		}
+		cur = t.snapshots.Current(tabID)
+	}
+	if cur == nil {
+		return nil, &types.APIError{Code: types.CodeInternal, Message: "could not obtain snapshot for find"}
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	q := strings.ToLower(strings.TrimSpace(req.Query))
+	wantRole := strings.ToLower(strings.TrimSpace(req.Role))
+
+	all := make([]*snapshots.Ref, 0, len(cur.Refs))
+	for _, r := range cur.Refs {
+		all = append(all, r)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		ni, _ := strconv.Atoi(strings.TrimPrefix(all[i].ID, "e"))
+		nj, _ := strconv.Atoi(strings.TrimPrefix(all[j].ID, "e"))
+		return ni < nj
+	})
+
+	matches := make([]types.FoundRef, 0)
+	for _, r := range all {
+		if req.ActionableOnly && !r.Actionable {
+			continue
+		}
+		if wantRole != "" && strings.ToLower(r.Role) != wantRole {
+			continue
+		}
+		if q != "" {
+			hay := strings.ToLower(r.Name + " " + r.Role + " " + r.Tag + " " + r.ID)
+			if !strings.Contains(hay, q) {
+				continue
+			}
+		}
+		matches = append(matches, types.FoundRef{
+			Ref:        "@" + strings.TrimPrefix(r.ID, "@"),
+			Role:       r.Role,
+			Name:       r.Name,
+			Tag:        r.Tag,
+			Actionable: r.Actionable,
+			States:     r.States,
+		})
+		if len(matches) >= limit {
+			break
+		}
+	}
+
+	s.touch(m.cfg.Now())
+	return &types.FindResult{
+		SnapshotID: cur.ID,
+		Generation: cur.Generation,
+		URL:        cur.URL,
+		TotalRefs:  len(cur.Refs),
+		Matches:    matches,
+	}, nil
+}
+
+// Emulate updates viewport dimensions, color scheme, reduced motion, or offline
+// network conditions on a tab.
+func (m *Manager) Emulate(ctx context.Context, sessionID, tabID string, req types.EmulateRequest) (*types.EmulateResult, *types.APIError) {
+	s, t, apiErr := m.lookup(sessionID, tabID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	leave, apiErr := t.enter(ctx, m.cfg.Limits)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	defer leave()
+
+	res, apiErr := t.page.Emulate(ctx, req)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	s.touch(m.cfg.Now())
+	return res, nil
 }
 
 // ensure referenced symbols stay imported

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="404" viewBox="0 0 880 404" role="img" aria-labelledby="title desc">
+  <title id="title">XT-Nichrome runtime</title>
+  <desc id="desc">Clients connect over REST, optional HTTP MCP, or stdio MCP. Each server has a session manager that controls Chromium over a DevTools pipe. Chromium reaches allowed origins through the policy proxy. Ni-Cursor is an optional companion.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" markerWidth="8" markerHeight="8" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1l8 4-8 4z" fill="#A1A1AA"/>
+    </marker>
+  </defs>
+  <path d="M17 1h838l24 24v362l-16 16H1V17z" fill="#0A0A0A" stroke="#454545"/>
+  <path d="M17 1h104v3H15z" fill="#FF2E2E"/>
+  <g font-family="monospace">
+    <text x="32" y="39" fill="#FF5656" font-size="16" font-weight="bold">Ni / 28</text>
+    <text x="127" y="39" fill="#E8E6E3" font-size="18" font-weight="bold">Runtime architecture</text>
+  </g>
+  <g fill="none" stroke="#A1A1AA" stroke-width="1.5" marker-end="url(#arrow)">
+    <path d="M166 133v35"/>
+    <path d="M166 247v35"/>
+    <path d="M300 320h36"/>
+    <path d="M543 320h39"/>
+    <path d="M300 208h282" stroke-dasharray="4 5"/>
+  </g>
+  <g fill="#151515" stroke="#454545">
+    <path d="M32 62h256l12 12v59H32z"/>
+    <path d="M32 170h256l12 12v65H32z"/>
+    <path d="M32 284h256l12 12v60H32z"/>
+    <path d="M338 284h193l12 12v60H338z" stroke="#FF2E2E"/>
+    <path d="M584 284h252l12 12v60H584z"/>
+    <path d="M584 170h252l12 12v65H584z" stroke-dasharray="4 4"/>
+  </g>
+  <g fill="#E8E6E3" font-family="monospace" font-size="17" font-weight="bold">
+    <text x="54" y="91">Client</text>
+    <text x="54" y="201">Session manager</text>
+    <text x="54" y="315">Chromium</text>
+    <text x="360" y="315">Policy proxy</text>
+    <text x="606" y="315">Permitted origins</text>
+    <text x="606" y="201">Ni-Cursor</text>
+  </g>
+  <g fill="#A1A1AA" font-family="monospace" font-size="13">
+    <text x="54" y="113">CLI / HTTP / MCP</text>
+    <text x="54" y="223">Leases / tabs / snapshots</text>
+    <text x="54" y="337">Isolated browser contexts</text>
+    <text x="360" y="337">Origin + IP checks</text>
+    <text x="606" y="337">Fixture or approved site</text>
+    <text x="606" y="223">Wayland / in-browser overlay</text>
+    <text x="181" y="156">REST or MCP</text>
+    <text x="181" y="269">DevTools pipe</text>
+    <text x="359" y="197">Optional guidance</text>
+  </g>
+</svg>

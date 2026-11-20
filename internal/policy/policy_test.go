@@ -209,3 +209,36 @@ func TestAllowPrivatePermitsLoopback(t *testing.T) {
 		t.Error("allowPrivate also opened an unrelated private range")
 	}
 }
+
+func TestAllowPublicWithSSRFProtection(t *testing.T) {
+	p, err := New(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetAllowPublic(true)
+	if !p.AllowPublic() {
+		t.Fatal("expected AllowPublic() to be true")
+	}
+	if _, apiErr := p.AdmitURL("https://news.ycombinator.com/item?id=1"); apiErr != nil {
+		t.Fatalf("expected public https URL to be admitted, got %v", apiErr)
+	}
+	if _, apiErr := p.AdmitURL("http://example.com/"); apiErr != nil {
+		t.Fatalf("expected public http URL to be admitted, got %v", apiErr)
+	}
+	if _, apiErr := p.AdmitURL("https://example.com:8443/"); apiErr == nil {
+		t.Fatal("expected non-standard port 8443 to be rejected without explicit rule")
+	}
+	if d := p.CheckEgress("news.ycombinator.com", 443); !d.Allowed {
+		t.Fatalf("expected port 443 egress to be allowed: %s", d.Reason)
+	}
+	if d := p.CheckEgress("news.ycombinator.com", 22); d.Allowed {
+		t.Fatal("expected port 22 egress to be denied")
+	}
+	// SSRF protection via CheckIPs stays strictly enforced.
+	if d := p.CheckIPs([]net.IP{net.ParseIP("169.254.169.254")}); d.Allowed {
+		t.Fatal("cloud metadata IP must remain blocked even when allowPublic is true")
+	}
+	if d := p.CheckIPs([]net.IP{net.ParseIP("127.0.0.1")}); d.Allowed {
+		t.Fatal("loopback IP must remain blocked when allowPrivate is false")
+	}
+}

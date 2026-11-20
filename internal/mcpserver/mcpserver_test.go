@@ -177,6 +177,8 @@ func TestToolRegistrationAndSchemas(t *testing.T) {
 		"browser_storage",
 		"browser_upload_file",
 		"browser_dialogs",
+		"browser_find",
+		"browser_emulate",
 		"companion_cursor_guide",
 		"companion_cursor_control",
 		"companion_analyze_selection",
@@ -195,6 +197,40 @@ func TestToolRegistrationAndSchemas(t *testing.T) {
 		if _, ok := got[name]; !ok {
 			t.Errorf("missing expected tool %q", name)
 		}
+	}
+
+	// Verify MCP Resources (list + read).
+	resList, err := clientSess.ListResources(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListResources: %v", err)
+	}
+	if len(resList.Resources) < 4 {
+		t.Fatalf("expected at least 4 MCP resources, got %d", len(resList.Resources))
+	}
+	for _, r := range resList.Resources {
+		readRes, err := clientSess.ReadResource(ctx, &mcp.ReadResourceParams{URI: r.URI})
+		if err != nil {
+			t.Fatalf("ReadResource(%s): %v", r.URI, err)
+		}
+		if len(readRes.Contents) == 0 || readRes.Contents[0].Text == "" {
+			t.Fatalf("ReadResource(%s) returned empty content", r.URI)
+		}
+	}
+
+	// Verify MCP Prompts (list + get).
+	promptList, err := clientSess.ListPrompts(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListPrompts: %v", err)
+	}
+	if len(promptList.Prompts) < 3 {
+		t.Fatalf("expected at least 3 MCP prompts, got %d", len(promptList.Prompts))
+	}
+	promptRes, err := clientSess.GetPrompt(ctx, &mcp.GetPromptParams{
+		Name:      "stealth_browse_and_extract",
+		Arguments: map[string]string{"url": "https://example.test", "goal": "Check heading"},
+	})
+	if err != nil || len(promptRes.Messages) == 0 {
+		t.Fatalf("GetPrompt(stealth_browse_and_extract) failed: err=%v msgs=%d", err, len(promptRes.Messages))
 	}
 }
 
@@ -466,6 +502,12 @@ func TestProtocolRoundTripWithRealBrowser(t *testing.T) {
 		"guide":       false,
 	}); r.IsError {
 		t.Fatalf("companion_analyze_selection failed: %+v", r.Content)
+	}
+	if r := callTool("browser_find", map[string]any{"query": "Submit", "role": "button"}); r.IsError {
+		t.Fatalf("browser_find failed: %+v", r.Content)
+	}
+	if r := callTool("browser_emulate", map[string]any{"colorScheme": "dark", "reducedMotion": "reduce"}); r.IsError {
+		t.Fatalf("browser_emulate failed: %+v", r.Content)
 	}
 
 	// 5d. companion_cursor_guide & companion_cursor_control (pointing at @eN with chat bubble!)
