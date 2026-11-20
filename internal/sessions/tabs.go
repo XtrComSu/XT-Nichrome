@@ -80,8 +80,11 @@ func (m *Manager) CreateTab(ctx context.Context, sessionID string, req types.Cre
 		return nil, apiErr
 	}
 	s.mu.Lock()
-	if len(s.tabs) >= m.cfg.Limits.MaxTabsPerSession {
-		inUse := len(s.tabs)
+	if s.closing || s.state == types.StateClosed {
+		s.mu.Unlock()
+		return nil, types.NewError(types.CodeNotFound, "session is closing")
+	}
+	if inUse := len(s.tabs) + s.openingTabs; inUse >= m.cfg.Limits.MaxTabsPerSession {
 		s.mu.Unlock()
 		return nil, &types.APIError{
 			Code:    types.CodeCapacity,
@@ -89,9 +92,27 @@ func (m *Manager) CreateTab(ctx context.Context, sessionID string, req types.Cre
 			Detail:  map[string]any{"limit": m.cfg.Limits.MaxTabsPerSession, "inUse": inUse},
 		}
 	}
+	s.openingTabs++
 	s.mu.Unlock()
 
-	pg, apiErr := s.proc.NewPage(ctx, s.contextID)
+	var pg *browser.Page
+	registered := false
+	defer func() {
+		if registered {
+			return
+		}
+		if pg != nil {
+			// A canceled request may still have created a Chromium target.
+			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			pg.Close(closeCtx)
+		}
+		s.mu.Lock()
+		s.openingTabs--
+		s.mu.Unlock()
+	}()
+
+	pg, apiErr = s.proc.NewPage(ctx, s.contextID)
 	if apiErr != nil {
 		return nil, apiErr
 	}
@@ -99,15 +120,11 @@ func (m *Manager) CreateTab(ctx context.Context, sessionID string, req types.Cre
 		id: newTabID(), page: pg, snapshots: snapshots.NewRegistry(),
 		createdAt: m.cfg.Now(), queue: make(chan struct{}, 1),
 	}
-	// Fail the tab creation if the persona did not actually install: an agent
-	// driving a half-spoofed browser produces polluted results.
 	report, apiErr := pg.VerifyPersona(ctx)
 	if apiErr != nil {
-		pg.Close(ctx)
 		return nil, apiErr
 	}
 	if !report.Consistent() {
-		pg.Close(ctx)
 		return nil, &types.APIError{
 			Code:    types.CodeInternal,
 			Message: "the browser identity could not be established for this tab",
@@ -115,26 +132,28 @@ func (m *Manager) CreateTab(ctx context.Context, sessionID string, req types.Cre
 		}
 	}
 
-	s.mu.Lock()
-	if s.closing {
-		s.mu.Unlock()
-		pg.Close(ctx)
-		return nil, &types.APIError{Code: types.CodeNotFound, Message: "session is closing"}
-	}
-	s.tabs[t.id] = t
-	s.tabOrder = append(s.tabOrder, t.id)
-	s.lastUsed = m.cfg.Now()
-	s.mu.Unlock()
-	m.totalTabs.Add(1)
-
 	out := &types.Tab{TabID: t.id, State: types.StateReady, CurrentURL: pg.CurrentURL()}
 	if req.URL != "" {
-		res, apiErr := m.Navigate(ctx, sessionID, t.id, types.NavigateRequest{URL: req.URL})
+		res, apiErr := m.navigateTab(ctx, s, t, types.NavigateRequest{URL: req.URL})
 		if apiErr != nil {
 			return nil, apiErr
 		}
 		out.CurrentURL = res.URL
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing || s.state == types.StateClosed {
+		return nil, types.NewError(types.CodeNotFound, "session is closing")
+	}
+	if ctx.Err() != nil {
+		return nil, types.NewError(types.CodeTimeout, "request was canceled while opening the tab")
+	}
+	s.openingTabs--
+	s.tabs[t.id] = t
+	s.tabOrder = append(s.tabOrder, t.id)
+	s.lastUsed = m.cfg.Now()
+	registered = true
 	return out, nil
 }
 
@@ -186,7 +205,6 @@ func (m *Manager) CloseTab(ctx context.Context, sessionID, tabID string) *types.
 	t.close()
 	t.snapshots.Invalidate(tabID)
 	t.page.Close(ctx)
-	m.totalTabs.Add(-1)
 	return nil
 }
 
@@ -214,6 +232,10 @@ func (m *Manager) Navigate(ctx context.Context, sessionID, tabID string, req typ
 	if apiErr != nil {
 		return nil, apiErr
 	}
+	return m.navigateTab(ctx, s, t, req)
+}
+
+func (m *Manager) navigateTab(ctx context.Context, s *session, t *tab, req types.NavigateRequest) (*types.NavigateResult, *types.APIError) {
 	if strings.TrimSpace(req.URL) == "" {
 		return nil, &types.APIError{Code: types.CodeInvalidRequest, Message: "url is required", Detail: map[string]any{"field": "url"}}
 	}
@@ -243,7 +265,7 @@ func (m *Manager) Navigate(ctx context.Context, sessionID, tabID string, req typ
 	defer leave()
 
 	// A navigation invalidates every reference taken against the old document.
-	t.snapshots.Invalidate(tabID)
+	t.snapshots.Invalidate(t.id)
 
 	res, apiErr := t.page.Navigate(ctx, req.URL, req.WaitUntil, timeout)
 	if apiErr != nil {

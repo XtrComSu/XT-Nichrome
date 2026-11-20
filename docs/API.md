@@ -79,7 +79,7 @@ Closes the session and all of its tabs, releasing its capacity slot and any pers
 ## 3. Tabs (`/v1/sessions/{id}/tabs`)
 
 ### `POST /v1/sessions/{id}/tabs`
-Opens a new tab, runs the startup stealth persona self-check gate, and optionally navigates to an initial URL.
+Opens a new tab, runs its startup checks, and optionally navigates to an initial URL. Pending opens reserve capacity. The tab appears in the session only after setup and initial navigation succeed. Failure releases its slot.
 ```json
 {
   "url": "https://example.com"

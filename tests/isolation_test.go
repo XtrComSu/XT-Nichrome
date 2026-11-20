@@ -1,8 +1,12 @@
 package tests
 
 import (
+	"net/http"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/xtrcom/xt-nichrome/internal/types"
 )
 
 // TestPersistentProfile survives a session close and reopen, which is the whole
@@ -213,5 +217,80 @@ func TestProfileBusy(t *testing.T) {
 	}}.json(&e)
 	if status != 409 || e.Code != "BUSY_PROFILE" {
 		t.Fatalf("second open of a busy profile gave %d %s (%s)", status, e.Code, e.Message)
+	}
+}
+
+func TestConcurrentTabOpenRespectsCapacity(t *testing.T) {
+	d := startDaemon(t, "-max-tabs", "2")
+	s := newSession(t, d)
+	path := "/v1/sessions/" + s.ID + "/tabs"
+
+	const workers = 8
+	start := make(chan struct{})
+	statuses := make(chan int, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			<-start
+			status, _ := call{T: t, D: d, Method: "POST", Path: path, Body: map[string]any{}}.do()
+			statuses <- status
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(statuses)
+
+	created := 0
+	for status := range statuses {
+		switch status {
+		case http.StatusCreated:
+			created++
+		case http.StatusTooManyRequests:
+		default:
+			t.Errorf("open returned unexpected status %d", status)
+		}
+	}
+	if created != 1 {
+		t.Errorf("opened %d additional tabs with one free slot", created)
+	}
+}
+
+func TestFailedInitialNavigationReleasesTab(t *testing.T) {
+	d := startDaemon(t, "-max-tabs", "2")
+	s := newSession(t, d)
+	path := "/v1/sessions/" + s.ID + "/tabs"
+
+	var denied apiError
+	status := call{T: t, D: d, Method: "POST", Path: path, Body: map[string]any{
+		"url": d.denied.URL + "/form",
+	}}.json(&denied)
+	if status != http.StatusForbidden || denied.Code != types.CodePolicyBlocked {
+		t.Fatalf("open returned %d %s, want a policy denial", status, denied.Code)
+	}
+
+	var ready types.Ready
+	call{T: t, D: d, Method: "GET", Path: "/readyz"}.mustOK(&ready)
+	if ready.Tabs != 1 {
+		t.Errorf("readiness reports %d tabs after a failed open, want 1", ready.Tabs)
+	}
+
+	var tab types.Tab
+	call{T: t, D: d, Method: "POST", Path: path, Body: map[string]any{
+		"url": d.fixtureURL(t, "/form"),
+	}}.mustOK(&tab)
+	if tab.TabID == "" || tab.CurrentURL != d.fixtureURL(t, "/form") {
+		t.Fatalf("replacement tab reported unexpected state: %+v", tab)
+	}
+}
+
+func TestSessionCloseUpdatesLiveTabCount(t *testing.T) {
+	d := startDaemon(t)
+	s := newSession(t, d)
+	call{T: t, D: d, Method: "DELETE", Path: "/v1/sessions/" + s.ID}.mustOK(nil)
+
+	var ready types.Ready
+	call{T: t, D: d, Method: "GET", Path: "/readyz"}.mustOK(&ready)
+	if ready.Sessions != 0 || ready.Tabs != 0 {
+		t.Fatalf("after close, readiness reports %d sessions and %d tabs", ready.Sessions, ready.Tabs)
 	}
 }

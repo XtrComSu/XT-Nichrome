@@ -98,7 +98,6 @@ type Manager struct {
 	closedCh chan struct{}
 	stopOnce sync.Once
 
-	totalTabs atomic.Int64
 	// deniedAdmissions counts navigations refused by the origin allowlist before
 	// the request ever reached the proxy. Without it, an operator watching the
 	// proxy's denial counter would see zero while every navigation is refused,
@@ -122,12 +121,13 @@ type session struct {
 	contextID string
 	ownsProc  bool
 
-	mu       sync.Mutex
-	tabs     map[string]*tab
-	tabOrder []string
-	state    string
-	lastUsed time.Time
-	closing  bool
+	mu          sync.Mutex
+	tabs        map[string]*tab
+	tabOrder    []string
+	openingTabs int
+	state       string
+	lastUsed    time.Time
+	closing     bool
 }
 
 type tab struct {
@@ -600,9 +600,9 @@ func (m *Manager) evictIdle() {
 	for id, s := range m.sessions {
 		s.mu.Lock()
 		idle := now.Sub(s.lastUsed)
-		closing := s.closing
+		canEvict := !s.closing && s.openingTabs == 0
 		s.mu.Unlock()
-		if !closing && idle > m.cfg.Limits.IdleTimeout {
+		if canEvict && idle > m.cfg.Limits.IdleTimeout {
 			victims = append(victims, id)
 		}
 	}
@@ -618,9 +618,13 @@ func (m *Manager) evictIdle() {
 // Stats reports live counts.
 func (m *Manager) Stats() (sessions int, tabs int) {
 	m.mu.Lock()
-	sessions = len(m.sessions)
-	m.mu.Unlock()
-	return sessions, int(m.totalTabs.Load())
+	defer m.mu.Unlock()
+	for _, s := range m.sessions {
+		s.mu.Lock()
+		tabs += len(s.tabs)
+		s.mu.Unlock()
+	}
+	return len(m.sessions), tabs
 }
 
 func removeString(list []string, s string) []string {

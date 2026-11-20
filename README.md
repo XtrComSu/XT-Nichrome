@@ -70,7 +70,7 @@ The fixture echoes the submitted name. The subshell closes the test session when
 
 ![XT-Nichrome runtime architecture showing the client, session manager, Chromium over the DevTools pipe, policy proxy, permitted origins, and optional Ni-Cursor](docs/diagrams/runtime.svg)
 
-- **Sessions and tabs.** Each server instance owns its session manager. Ephemeral sessions use isolated contexts in a shared Chromium process. Persistent sessions use dedicated Chromium processes and locked profile directories under `<state-dir>/profiles`. Operations on a tab share a bounded queue.
+- **Sessions and tabs.** Each server instance owns its session manager. Ephemeral sessions use isolated contexts in a shared Chromium process. Persistent sessions use dedicated Chromium processes and locked profile directories under `<state-dir>/profiles`. Operations on a tab share a bounded queue. Tab creation reserves capacity while Chromium starts the page and releases that slot if setup or the initial navigation fails.
 - **Browser control.** Go talks to Chromium over the Chromium DevTools Protocol (CDP) pipe. The browser has no TCP debugging listener. The HTTP daemon's REST and MCP endpoints are separate from that pipe.
 - **Network access.** Navigation admission checks the destination origin. Chromium's HTTP, HTTPS, and WebSocket traffic passes through a local proxy that checks policy and resolved IPs. Private and loopback access is blocked by default.
 - **Accessibility snapshots.** A snapshot returns readable page structure and handles such as `@e3`. A handle belongs to one snapshot of one tab. When a navigation or document change invalidates it, inspect the page again before acting.
@@ -170,14 +170,14 @@ The REST JSON decoder rejects unknown fields, duplicate keys, and trailing data.
 | `make e2e` | End-to-end tests against a real Chromium browser | Chromium, daemon font pack, loopback sockets |
 | `make bench` | Direct CDP and daemon fixture measurements | Chromium, daemon font pack, loopback sockets |
 
-![Historical fixture timings in milliseconds. The dots show medians and line ends show p95. Exact values are in the table below.](docs/diagrams/fixture-latency.svg)
+![Recorded fixture timings in milliseconds. The dots show medians and line ends show p95. Exact values are in the table below.](docs/diagrams/fixture-latency.svg)
 
 | Operation | Direct CDP median / p95 | XT-Nichrome median / p95 |
 | --- | ---: | ---: |
-| Navigate and load | 13.2 / 23.7 ms | 19.5 / 31.0 ms |
-| Read accessibility data | 3.1 / 4.3 ms | 2.4 / 7.0 ms |
+| Navigate and load | 12.7 / 21.9 ms | 18.4 / 28.7 ms |
+| Read accessibility data | 2.5 / 4.2 ms | 2.7 / 6.8 ms |
 
-These values come from the repository's earlier Chromium 141 baseline on an eight-core host (`6cabe0e`), using 30 samples per navigation and accessibility loop. The accessibility rows compare a raw CDP tree fetch with a service snapshot, which return different outputs. Run `make bench` for measurements on your host. [Benchmark source](bench/bench_test.go)
+These values come from a `make bench` run with Chromium 141 on November 20, 2026, using 30 samples per navigation and accessibility loop. The accessibility rows compare a raw CDP tree fetch with a service snapshot, which return different outputs. Run `make bench` for measurements on your host. [Benchmark source](bench/bench_test.go)
 
 ## Repository map
 

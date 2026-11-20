@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="382" viewBox="0 0 880 382" role="img" aria-labelledby="title desc">
   <title id="title">XT-Nichrome recorded fixture latency</title>
-  <desc id="desc">Historical median and 95th-percentile times in milliseconds. Navigation: direct CDP 13.2 and 23.7, XT-Nichrome 19.5 and 31.0. Accessibility read: direct CDP tree 3.1 and 4.3, XT-Nichrome snapshot 2.4 and 7.0.</desc>
+  <desc id="desc">Median and 95th-percentile times in milliseconds. Navigation: direct CDP 12.7 and 21.9, XT-Nichrome 18.4 and 28.7. Accessibility read: direct CDP tree 2.5 and 4.2, XT-Nichrome snapshot 2.7 and 6.8.</desc>
   <path d="M17 1h838l24 24v340l-16 16H1V17z" fill="#0A0A0A" stroke="#454545"/>
   <path d="M17 1h104v3H15z" fill="#FF2E2E"/>
   <g font-family="monospace">
@@ -32,13 +32,13 @@
     </g>
   </g>
   <g stroke-width="4" fill="none">
-    <path d="M250 151H629.2m0-6v12M250 251H318.8m0-6v12" stroke="#A1A1AA"/>
-    <path d="M250 181H746m0-6v12M250 281H362m0-6v12" stroke="#FF2E2E"/>
+    <path d="M250 151H600.4m0-6v12M250 251H317.2m0-6v12" stroke="#A1A1AA"/>
+    <path d="M250 181H709.2m0-6v12M250 281H358.8m0-6v12" stroke="#FF2E2E"/>
   </g>
   <g stroke="#0A0A0A" stroke-width="2">
-    <circle cx="461.2" cy="151" r="6" fill="#E8E6E3"/>
-    <circle cx="562" cy="181" r="6" fill="#FF5656"/>
-    <circle cx="299.6" cy="251" r="6" fill="#E8E6E3"/>
-    <circle cx="288.4" cy="281" r="6" fill="#FF5656"/>
+    <circle cx="453.2" cy="151" r="6" fill="#E8E6E3"/>
+    <circle cx="544.4" cy="181" r="6" fill="#FF5656"/>
+    <circle cx="290" cy="251" r="6" fill="#E8E6E3"/>
+    <circle cx="293.2" cy="281" r="6" fill="#FF5656"/>
   </g>
 </svg>

@@ -345,7 +345,7 @@ func TestM3RequestValidation(t *testing.T) {
 		{"unknown field", `{"kind":"click","snapshotId":"x","ref":"e1","nope":1}`, 400, "INVALID_REQUEST"},
 		{"duplicate key", `{"kind":"click","kind":"fill","snapshotId":"x","ref":"e1"}`, 400, "INVALID_REQUEST"},
 		{"wrong type", `{"kind":"click","snapshotId":5,"ref":"e1"}`, 400, "INVALID_REQUEST"},
-		{"bad kind", `{"kind":"hover","snapshotId":"x","ref":"e1"}`, 400, "INVALID_REQUEST"},
+		{"bad kind", `{"kind":"unknown-action","snapshotId":"x","ref":"e1"}`, 400, "INVALID_REQUEST"},
 		{"click with text", `{"kind":"click","snapshotId":"x","ref":"e1","text":"hi"}`, 400, "INVALID_REQUEST"},
 		{"trailing value", `{"kind":"click","snapshotId":"x","ref":"e1"}{"a":1}`, 400, "INVALID_REQUEST"},
 	}

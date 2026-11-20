@@ -2,7 +2,7 @@
 
 XT-Nichrome uses the XT industrial geometric house style paired with the periodic-table element tile for **Nickel (`Ni`, atomic number `28`, atomic mass `58.6934`)** — the primary constituent of the nichrome resistance alloy (`80% Ni / 20% Cr`).
 
-All SVG files in this directory are **100% pure vector `<path>` geometry** with zero `<text>` or external font dependencies, guaranteeing identical rendering across Linux, Windows, macOS, GitHub, and headless rasterizers.
+The SVG artwork uses vector paths with no external fonts. The horizontal wordmark includes an accessible title and description.
 
 ## Color Palette
 
@@ -18,7 +18,7 @@ All SVG files in this directory are **100% pure vector `<path>` geometry** with 
 ## Construction Grid
 
 - **Periodic Tile (`logo-ni*.svg`):** `512 × 512` viewBox with `24 px` / `64 px` asymmetric industrial corner chamfers (`45°` bevels), `12 px` inset hairline frame, and `36 px` primary stem weight on the central `Ni` symbol.
-- **Display Letterforms (`logo-word.svg`):** Constructed on a `60 × 100` unit cell with `16` unit stem/crossbar thickness and `20` unit inter-glyph tracking, paired with the authentic XT chevron (`X`) and crimson `T`.
+- **Horizontal Wordmark (`logo-word.svg`):** A `1120 × 240` chamfered panel with a compact nickel tile, the XT chevron and crimson `T`, and custom lettering on a shared 100-unit cap line.
 - **Favicon (`favicon.svg`):** `32 × 32` hexagonal perimeter ring (`1.8 px` stroke) housing a high-contrast `Ni` monogram with a crimson `2.4 × 2.4` tittle for sub-32px legibility.
 
 ## Clear Space & Minimum Sizes
