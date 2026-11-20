@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 418" role="img" aria-labelledby="title desc">
+  <title id="title">MCP tools by capability</title>
+  <desc id="desc">Sessions and tabs, 6. Navigation and inspection, 7. Page interactions, 10. Page data and diagnostics, 11. Companion controls, 3.</desc>
+  <path d="M17 1h838l24 24v376l-16 16H1V17z" fill="#0A0A0A" stroke="#454545"/>
+  <path d="M17 1h104v3H15z" fill="#FF2E2E"/>
+  <g font-family="monospace">
+    <text x="32" y="39" fill="#FF5656" font-size="16" font-weight="bold">Ni / 28</text>
+    <text x="127" y="39" fill="#E8E6E3" font-size="18" font-weight="bold">MCP tools by capability</text>
+    <text x="32" y="71" fill="#A1A1AA" font-size="14">37 tools across both transports</text>
+    <path d="M304 96V360" fill="none" stroke="#353535"/>
+    <text x="304" y="385" text-anchor="middle" fill="#A1A1AA" font-size="14">0</text>
+    <path d="M429 96V360" fill="none" stroke="#353535"/>
+    <text x="429" y="385" text-anchor="middle" fill="#A1A1AA" font-size="14">3</text>
+    <path d="M554 96V360" fill="none" stroke="#353535"/>
+    <text x="554" y="385" text-anchor="middle" fill="#A1A1AA" font-size="14">6</text>
+    <path d="M679 96V360" fill="none" stroke="#353535"/>
+    <text x="679" y="385" text-anchor="middle" fill="#A1A1AA" font-size="14">9</text>
+    <path d="M804 96V360" fill="none" stroke="#353535"/>
+    <text x="804" y="385" text-anchor="middle" fill="#A1A1AA" font-size="14">12 tools</text>
+    <text x="32" y="129" fill="#E8E6E3" font-size="16">Sessions &amp; tabs</text>
+    <path d="M304 112h243l7 7v15h-250z" fill="#FF4545"/>
+    <text x="565" y="129" fill="#E8E6E3" font-size="16" font-weight="bold">6</text>
+    <text x="32" y="180" fill="#E8E6E3" font-size="16">Navigation &amp; inspection</text>
+    <path d="M304 163h284.667l7 7v15h-291.667z" fill="#FF4545"/>
+    <text x="606.667" y="180" fill="#E8E6E3" font-size="16" font-weight="bold">7</text>
+    <text x="32" y="231" fill="#E8E6E3" font-size="16">Page interactions</text>
+    <path d="M304 214h409.667l7 7v15h-416.667z" fill="#FF4545"/>
+    <text x="731.667" y="231" fill="#E8E6E3" font-size="16" font-weight="bold">10</text>
+    <text x="32" y="282" fill="#E8E6E3" font-size="16">Page data &amp; diagnostics</text>
+    <path d="M304 265h451.333l7 7v15h-458.333z" fill="#FF4545"/>
+    <text x="773.333" y="282" fill="#E8E6E3" font-size="16" font-weight="bold">11</text>
+    <text x="32" y="333" fill="#E8E6E3" font-size="16">Companion controls</text>
+    <path d="M304 316h118l7 7v15h-125z" fill="#FF4545"/>
+    <text x="440" y="333" fill="#E8E6E3" font-size="16" font-weight="bold">3</text>
+  </g>
+</svg>

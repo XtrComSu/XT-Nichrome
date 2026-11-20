@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 265" role="img" aria-labelledby="title desc">
+  <title id="title">Cold setup time</title>
+  <desc id="desc">Direct Chromium launch to first CDP reply took 147.3 milliseconds. The running daemon opened its first session and tab in 545.2 milliseconds.</desc>
+  <path d="M17 1h838l24 24v223l-16 16H1V17z" fill="#0A0A0A" stroke="#454545"/>
+  <path d="M17 1h104v3H15z" fill="#FF2E2E"/>
+  <g font-family="monospace">
+    <text x="32" y="39" fill="#FF5656" font-size="16" font-weight="bold">Ni / 28</text>
+    <text x="127" y="39" fill="#E8E6E3" font-size="18" font-weight="bold">Cold setup time</text>
+    <text x="32" y="71" fill="#A1A1AA" font-size="14">Single sample per path / Chromium 141</text>
+    <path d="M304 96V207" fill="none" stroke="#353535"/>
+    <text x="304" y="232" text-anchor="middle" fill="#A1A1AA" font-size="14">0</text>
+    <path d="M429 96V207" fill="none" stroke="#353535"/>
+    <text x="429" y="232" text-anchor="middle" fill="#A1A1AA" font-size="14">150</text>
+    <path d="M554 96V207" fill="none" stroke="#353535"/>
+    <text x="554" y="232" text-anchor="middle" fill="#A1A1AA" font-size="14">300</text>
+    <path d="M679 96V207" fill="none" stroke="#353535"/>
+    <text x="679" y="232" text-anchor="middle" fill="#A1A1AA" font-size="14">450</text>
+    <path d="M804 96V207" fill="none" stroke="#353535"/>
+    <text x="804" y="232" text-anchor="middle" fill="#A1A1AA" font-size="14">600 ms</text>
+    <text x="32" y="129" fill="#E8E6E3" font-size="16">First direct CDP reply</text>
+    <path d="M304 112h115.75l7 7v15h-122.75z" fill="#A1A1AA"/>
+    <text x="437.75" y="129" fill="#E8E6E3" font-size="16" font-weight="bold">147.3</text>
+    <text x="32" y="180" fill="#E8E6E3" font-size="16">First service session + tab</text>
+    <path d="M304 163h447.333l7 7v15h-454.333z" fill="#FF4545"/>
+    <text x="769.333" y="180" fill="#E8E6E3" font-size="16" font-weight="bold">545.2</text>
+  </g>
+</svg>

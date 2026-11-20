@@ -24,10 +24,10 @@
     <path fill="#FF2E2E" d="M34 144h26v2H34z"/>
   </g>
 
-  <!-- XT mark, retained from the original lockup -->
-  <g transform="translate(247 57) scale(3.6)">
-    <path fill="#E8E6E3" d="M2.6 6.6h5.9l2.8 5.6 2.8-5.6h5.3l-4.6 9.9 4.6 9.9h-5.3l-2.8-5.6-2.8 5.6H2.6l5.3-9.9z"/>
-    <path fill="#FF2E2E" d="M20.7 6.6h8.5v4.6h-2.8v15.2h-4.1V11.2h-1.6z"/>
+  <!-- Symmetric XT on the same cap line and baseline as NICHROME -->
+  <g transform="translate(250 81) scale(.71)">
+    <path fill="#E8E6E3" d="M0 0h19l16 32L51 0h19L44 50l26 50H51L35 68l-16 32H0l26-50z"/>
+    <path fill="#FF2E2E" transform="translate(82)" d="M0 0h68v15H43v85H25V15H0z"/>
   </g>
 
   <!-- NICHROME on a shared 100-unit cap line -->

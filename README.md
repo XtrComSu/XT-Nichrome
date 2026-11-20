@@ -6,7 +6,7 @@
 
 XT-Nichrome is a Linux service for driving Chromium from a CLI, REST client, or MCP client. Use it to run browser tests against local fixtures, inspect pages through accessibility snapshots, and capture screenshots or PDFs. The optional **Ni-Cursor** displays a second pointer and guidance on supported Wayland desktops and in browser tabs.
 
-[Quick start](#quick-start) · [Architecture](#architecture) · [MCP and REST](#mcp-and-rest) · [Operations](#operations) · [Testing and benchmarks](#testing-and-benchmarks)
+[See it in action](#see-it-in-action) · [Features](#features) · [Quick start](#quick-start) · [Architecture](#architecture) · [MCP and REST](#mcp-and-rest) · [Benchmarks](#testing-and-benchmarks)
 
 | Interface | Use it for | Entry point |
 | --- | --- | --- |
@@ -15,6 +15,27 @@ XT-Nichrome is a Linux service for driving Chromium from a CLI, REST client, or 
 | **MCP over stdio** | A client-managed local process with 37 tools, 4 resources, and 3 prompts | `bin/nichrome-mcp` |
 | **MCP over HTTP** | A running daemon shared by REST and MCP clients | `bin/nichrome -mcp-http` · `/mcp` |
 | **Ni-Cursor** | Optional visual guidance and selection responses | `bin/nichrome-cursor` |
+
+## See it in action
+
+![XT-Nichrome screenshot of a local Chromium form next to accessibility references, with Ni-Cursor pointing at Submit](docs/demo-form.png)
+
+This capture uses the local form fixture with documentation styling. XT-Nichrome filled the visible fields, read the accessibility references, and drew the Ni-Cursor bubble inside the browser tab.
+
+## Features
+
+| Workflow | What XT-Nichrome provides |
+| --- | --- |
+| **Run a browser test** | Open a tab, navigate, wait for text, and interact with forms, checkboxes, dropdowns, or file inputs. |
+| **Inspect a page** | Read an accessibility snapshot, find elements by role or text, and extract headings, text, and links. |
+| **Reproduce a layout issue** | Change viewport size, color scheme, or reduced-motion settings and capture a PNG or PDF. |
+| **Diagnose a failed step** | Inspect network responses, console messages, or dialog history. Check the page before repeating a write with an uncertain result. |
+| **Keep test state isolated** | Use ephemeral contexts for fresh runs or a locked persistent profile when cookies and storage must survive a restart. |
+| **Show where to act** | Point Ni-Cursor at an element in Chromium or display a desktop overlay on supported Wayland compositors. |
+
+![Horizontal bar chart of 37 MCP tools by capability. Sessions and tabs 6, navigation and inspection 7, page interactions 10, page data and diagnostics 11, companion controls 3.](docs/diagrams/mcp-tool-inventory.svg)
+
+Stdio and HTTP expose the same tool inventory, along with four resources and three prompts. [Full MCP tool reference](docs/MCP.md#2-complete-37-tool-inventory)
 
 ## Quick start
 
@@ -65,6 +86,8 @@ Run the workflow in a third terminal. The CLI reads the generated token from the
 ```
 
 The fixture echoes the submitted name. The subshell closes the test session when the workflow ends. Stop the daemon and fixture server with Ctrl-C when finished.
+
+![XT-Nichrome screenshot of the local form receipt and browser telemetry showing HTTP 200 for POST /form/submit](docs/demo-result.png)
 
 ## Architecture
 
@@ -170,14 +193,30 @@ The REST JSON decoder rejects unknown fields, duplicate keys, and trailing data.
 | `make e2e` | End-to-end tests against a real Chromium browser | Chromium, daemon font pack, loopback sockets |
 | `make bench` | Direct CDP and daemon fixture measurements | Chromium, daemon font pack, loopback sockets |
 
-![Recorded fixture timings in milliseconds. The dots show medians and line ends show p95. Exact values are in the table below.](docs/diagrams/fixture-latency.svg)
+### Navigation and accessibility
+
+![Navigation and accessibility timings in milliseconds. Dots mark medians. Line ends mark the 95th percentile.](docs/diagrams/fixture-latency.svg)
 
 | Operation | Direct CDP median / p95 | XT-Nichrome median / p95 |
 | --- | ---: | ---: |
-| Navigate and load | 12.7 / 21.9 ms | 18.4 / 28.7 ms |
-| Read accessibility data | 2.5 / 4.2 ms | 2.7 / 6.8 ms |
+| Navigate and load | 13.8 / 18.8 ms | 20.6 / 27.6 ms |
+| Read accessibility data | 2.5 / 5.4 ms | 2.8 / 6.4 ms |
 
-These values come from a `make bench` run with Chromium 141 on November 20, 2026, using 30 samples per navigation and accessibility loop. The accessibility rows compare a raw CDP tree fetch with a service snapshot, which return different outputs. Run `make bench` for measurements on your host. [Benchmark source](bench/bench_test.go)
+The accessibility timings cover different outputs. Direct CDP fetches the raw accessibility tree. The service renders a snapshot with element references.
+
+### Cold setup
+
+![Bar chart showing 147.3 ms to the first direct CDP reply and 545.2 ms to the first XT-Nichrome session and tab.](docs/diagrams/startup-latency.svg)
+
+The direct run measures Chromium launch through the first successful DevTools reply. The service run starts after the daemon is ready and measures Chromium startup plus session and tab creation. Each value comes from one timed setup.
+
+### Resident process memory
+
+![Bar chart showing 205.7 MiB resident memory for the direct Chromium process and 16.7 MiB for the XT-Nichrome daemon.](docs/diagrams/process-memory.svg)
+
+The daemon sample covers the Go process alone. Chromium and its child processes run separately, so these readings describe individual processes.
+
+These figures come from one `make bench` run with Chromium 141 on November 20, 2026. The navigation and accessibility timings use 30 samples per loop. Run `make bench` to measure your own host. [Benchmark source](bench/bench_test.go)
 
 ## Repository map
 

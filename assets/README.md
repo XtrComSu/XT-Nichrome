@@ -18,7 +18,7 @@ The SVG artwork uses vector paths with no external fonts. The horizontal wordmar
 ## Construction Grid
 
 - **Periodic Tile (`logo-ni*.svg`):** `512 × 512` viewBox with `24 px` / `64 px` asymmetric industrial corner chamfers (`45°` bevels), `12 px` inset hairline frame, and `36 px` primary stem weight on the central `Ni` symbol.
-- **Horizontal Wordmark (`logo-word.svg`):** A `1120 × 240` chamfered panel with a compact nickel tile, the XT chevron and crimson `T`, and custom lettering on a shared 100-unit cap line.
+- **Horizontal Wordmark (`logo-word.svg`):** A `1120 × 240` chamfered panel with a compact nickel tile, a symmetric `X` and centered crimson `T`, and custom lettering on a shared 100-unit cap line.
 - **Favicon (`favicon.svg`):** `32 × 32` hexagonal perimeter ring (`1.8 px` stroke) housing a high-contrast `Ni` monogram with a crimson `2.4 × 2.4` tittle for sub-32px legibility.
 
 ## Clear Space & Minimum Sizes
