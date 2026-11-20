@@ -6,7 +6,7 @@
 
 XT-Nichrome is a Linux service for driving Chromium from a CLI, REST client, or MCP client. Use it to run browser tests against local fixtures, inspect pages through accessibility snapshots, and capture screenshots or PDFs. The optional **Ni-Cursor** displays a second pointer and guidance on supported Wayland desktops and in browser tabs.
 
-[See it in action](#see-it-in-action) · [Features](#features) · [Quick start](#quick-start) · [Architecture](#architecture) · [MCP and REST](#mcp-and-rest) · [Benchmarks](#testing-and-benchmarks)
+[Download](https://github.com/XtrComSu/XT-Nichrome/releases/latest) · [See it in action](#see-it-in-action) · [Quick start](#quick-start) · [Architecture](#architecture) · [MCP and REST](#mcp-and-rest) · [Benchmarks](#testing-and-benchmarks)
 
 | Interface | Use it for | Entry point |
 | --- | --- | --- |
@@ -15,6 +15,7 @@ XT-Nichrome is a Linux service for driving Chromium from a CLI, REST client, or 
 | **MCP over stdio** | A client-managed local process with 37 tools, 4 resources, and 3 prompts | `bin/nichrome-mcp` |
 | **MCP over HTTP** | A running daemon shared by REST and MCP clients | `bin/nichrome -mcp-http` · `/mcp` |
 | **Ni-Cursor** | Optional visual guidance and selection responses | `bin/nichrome-cursor` |
+| **Screen handoff** | Share a desktop snapshot and pointer position from Hyprland | `bin/nichrome-screen` |
 
 ## See it in action
 
@@ -38,6 +39,8 @@ This capture uses the local form fixture with documentation styling. XT-Nichrome
 Stdio and HTTP expose the same tool inventory, along with four resources and three prompts. [Full MCP tool reference](docs/MCP.md#2-complete-37-tool-inventory)
 
 ## Quick start
+
+The [GitHub release](https://github.com/XtrComSu/XT-Nichrome/releases/latest) provides source archives and a Linux x86-64 bundle with checksums. The bundle contains the daemon, CLI, stdio MCP server, fixture server, and Ni-Cursor commands. Follow the [installation guide](docs/INSTALL.md) for Chromium and the font pack. For the native Ni-Cursor overlay, build with `make cursor` and the Wayland development packages.
 
 Run a form smoke test on a loopback fixture. You need Go 1.25 or later, Chromium, Python 3 with FontTools for the daemon's font pack, and `jq` for the shell example. See the installation guide for platform packages and the Chromium build used by the project. [Installation guide](docs/INSTALL.md)
 
