@@ -12,7 +12,7 @@ LISTEN    ?= 127.0.0.1:7788
 FIXTURE   ?= 127.0.0.1:7788
 DETECT    ?= 127.0.0.1:7799
 
-.PHONY: all build cli mcp cursor fixture detect test unit e2e bench race fmt vet lint fonts run clean help
+.PHONY: all build cli mcp cursor screen fixture detect test unit e2e bench race fmt vet lint fonts run clean help
 
 all: fmt vet test
 
@@ -28,11 +28,14 @@ cli: ## Build the CLI client
 mcp: ## Build the standalone stdio MCP server
 	$(GO) build -trimpath -o bin/nichrome-mcp ./cmd/nichrome-mcp
 
-cursor: ## Build the Wayland/Hyprland companion 2nd cursor CLI and layer-shell overlay
+cursor: screen ## Build the Wayland/Hyprland companion 2nd cursor CLI and layer-shell overlay
 	$(GO) build -trimpath -o bin/nichrome-cursor ./cmd/nichrome-cursor
 	@if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists gtk+-3.0 gtk-layer-shell-0 cairo pangocairo; then \
 		gcc -O2 internal/companion/wayland_overlay.c -o bin/nichrome-cursor-wayland $$(pkg-config --cflags --libs gtk+-3.0 gtk-layer-shell-0 cairo pangocairo) -lm; \
 	fi
+
+screen: ## Build the local Alt-key screen handoff command
+	$(GO) build -trimpath -o bin/nichrome-screen ./cmd/nichrome-screen
 
 fixture: ## Build the fixture server
 	$(GO) build -trimpath -o bin/fixture-server ./cmd/fixture-server

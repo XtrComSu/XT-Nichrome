@@ -214,7 +214,7 @@ func (c *Controller) NotifyAction(x, y float64, ref, kind, detail string) (types
 }
 
 func (c *Controller) syncWaylandLocked() {
-	if c.disableExec || c.state.WaylandDisplay == "" {
+	if c.disableExec {
 		return
 	}
 	wire := map[string]any{
@@ -234,13 +234,19 @@ func (c *Controller) syncWaylandLocked() {
 			client := &http.Client{Timeout: 250 * time.Millisecond}
 			resp, err := client.Post("http://127.0.0.1:7798/overlay", "application/json", bytes.NewReader(body))
 			if err == nil {
+				var desktop types.CompanionState
+				decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&desktop)
 				_ = resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					c.state.WaylandActive = true
+				if resp.StatusCode == http.StatusOK && decodeErr == nil {
+					c.state.WaylandActive = desktop.WaylandActive
 					return
 				}
 			}
 		}
+	}
+	if c.state.WaylandDisplay == "" {
+		c.state.WaylandActive = false
+		return
 	}
 	if c.state.Visible && c.stdin == nil {
 		c.startWaylandHelperLocked()

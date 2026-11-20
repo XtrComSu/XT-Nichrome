@@ -145,6 +145,12 @@ Run `make cursor` to build the Go companion. The target also builds the native o
 
 Selection watching requires `wl-paste`. Use the installation guide to check native dependencies and configure Hyprland shortcuts. [Ni-Cursor setup](docs/INSTALL.md#4-optional-wayland--hyprland-2nd-companion-cursor-ni-cursor)
 
+For desktop context, `make screen` builds `bin/nichrome-screen`. A Hyprland
+binding can run it when either Alt key is pressed. It saves one private desktop
+image plus `latest.json` with the pointer position, active window, and current
+primary text selection. A running agent can read that file and open the image
+to see what you are pointing at. [Alt screen handoff setup](docs/MCP.md#alt-screen-handoff-hyprland)
+
 ## Operations
 
 | Setting | Default | What it controls |

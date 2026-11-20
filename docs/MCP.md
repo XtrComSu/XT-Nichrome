@@ -1,5 +1,33 @@
 # XT-Nichrome Model Context Protocol (MCP) Server & Companion 2nd Cursor
 
+## Alt screen handoff (Hyprland)
+
+`nichrome-screen` captures the desktop, pointer coordinates, active window, and
+Wayland primary selection when the user presses either Alt key. The Hyprland
+binding uses `non_consuming`, so existing Alt shortcuts remain available.
+
+```bash
+go build -o bin/nichrome-screen ./cmd/nichrome-screen
+bin/nichrome-screen          # take a capture now
+bin/nichrome-screen -latest  # read the last capture metadata
+```
+
+Add these bindings to `~/.config/hypr/hyprland.lua` (or use the equivalent
+bindings for your desktop):
+
+```lua
+hl.bind("Alt_L", hl.dsp.exec_cmd("/absolute/path/to/bin/nichrome-screen"), { non_consuming = true })
+hl.bind("Alt_R", hl.dsp.exec_cmd("/absolute/path/to/bin/nichrome-screen"), { non_consuming = true })
+```
+
+Each capture
+replaces the prior image in `$XDG_RUNTIME_DIR/xt-nichrome/screen/`, a private
+directory. `latest.json` contains the image path, UTC time, pointer X/Y,
+active window class/title, and selected text when available. An agent can read
+the JSON and open the image path with its local image viewer. Alt does not
+start a new agent turn by itself; a running agent must poll `-latest` to see
+new captures, or the user can send a message after pressing Alt.
+
 XT-Nichrome ships a first-class MCP server (`internal/mcpserver`) built on the official Go SDK (`github.com/modelcontextprotocol/go-sdk v1.8.0`) exposing **37 typed tools**, **4 live JSON resources**, and **3 guided prompts** across session management, tab lifecycle, Playwright/Camofox+ humanized interactions, locator search (`browser_find`), viewport/media emulation (`browser_emulate`), JavaScript evaluation, PDF rendering, Web Storage (`localStorage`/`sessionStorage`), file uploads, dialog handling, structured extraction, console/network telemetry, cookie state, and the **Ni-Cursor 2nd Companion Cursor** (native Wayland/Hyprland `wlr-layer-shell` overlay + in-browser Shadow DOM overlay + real-time highlight/selection responder).
 
 ## 1. Transports
@@ -141,3 +169,24 @@ On Wayland compositors supporting `wlr-layer-shell` (such as Hyprland and Sway),
   # Or guide to a specific spot on Hyprland:
   ./bin/nichrome-cursor -x 820 -y 440 -mood friendly -subtext "@e4 • Confirm" -say "hey, you should click this to help me!" -duration 5s
   ```
+
+### Control a single desktop overlay from a local agent
+
+Start the daemon in the Wayland session. It listens on loopback and starts with the cursor hidden.
+
+```sh
+./bin/nichrome-cursor -listen 127.0.0.1:7798 -start-hidden
+```
+
+From another shell or a local coding agent, use `-control` to send commands to that same overlay.
+
+```sh
+./bin/nichrome-cursor -control status
+./bin/nichrome-cursor -control guide -x 680 -y 420 -say "Look here" -pulse=true
+./bin/nichrome-cursor -control move -x 930 -y 500 -say "Now look here"
+./bin/nichrome-cursor -control hide
+```
+
+Coordinates use the desktop overlay's coordinate system. Omitted position and mood flags keep the daemon's current values. The cursor auto-hides after eight seconds by default. Use `-pin-seconds` to change the hold time for a command.
+
+On the same machine, an XT-Nichrome MCP process can forward desktop companion commands to this loopback daemon even when the process starts without `WAYLAND_DISPLAY`.

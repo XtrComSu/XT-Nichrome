@@ -33,12 +33,40 @@ func main() {
 		pulse          = flag.Bool("pulse", true, "render expanding crimson pulse ring at cursor tip")
 		demo           = flag.Bool("demo", false, "run an interactive multi-step tour across the screen")
 		listen         = flag.String("listen", "", "run as a live HTTP daemon (e.g. 127.0.0.1:7798) keeping the overlay open")
+		control        = flag.String("control", "", "send status|guide|move|say|show|hide|clear to the local cursor daemon")
+		startHidden    = flag.Bool("start-hidden", false, "start the cursor daemon with a hidden overlay")
+		pinSeconds     = flag.Int("pin-seconds", 8, "seconds to hold a position sent with -control")
 		followUser     = flag.Bool("follow-user", false, "gently shadow the user's Hyprland cursor and active window when not pinned")
 		watchSelection = flag.Bool("watch-selection", false, "activate automatically when the user highlights/selects text on Wayland and reply in real time")
 		autoHide       = flag.Duration("auto-hide", 6*time.Second, "auto-hide the overlay after selection reply when follow-user is false (0 disables)")
 		duration       = flag.Duration("duration", 5*time.Second, "how long to keep the overlay visible (0 = until Ctrl+C)")
 	)
 	flag.Parse()
+
+	if *control != "" {
+		req := types.CompanionRequest{Action: *control}
+		flag.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "x":
+				req.X = x
+			case "y":
+				req.Y = y
+			case "say":
+				req.Message = *say
+			case "subtext":
+				req.Subtext = *subtext
+			case "mood":
+				req.Mood = *mood
+			case "pulse":
+				req.Pulse = pulse
+			}
+		})
+		if err := sendControl(req, *pinSeconds); err != nil {
+			fmt.Fprintf(os.Stderr, "nichrome-cursor: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	ctrl := companion.New()
 	defer ctrl.Close()
@@ -47,7 +75,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	if *listen != "" {
-		runDaemon(ctrl, *listen, *followUser, *watchSelection, *autoHide, *x, *y, *mood, *subtext, *say, *pulse, sigCh)
+		runDaemon(ctrl, *listen, *startHidden, *followUser, *watchSelection, *autoHide, *x, *y, *mood, *subtext, *say, *pulse, sigCh)
 		return
 	}
 
@@ -117,7 +145,7 @@ func main() {
 	}
 }
 
-func runDaemon(ctrl *companion.Controller, addr string, followInitial, watchSelInitial bool, autoHide time.Duration, initX, initY float64, mood, subtext, say string, pulse bool, sigCh <-chan os.Signal) {
+func runDaemon(ctrl *companion.Controller, addr string, startHidden, followInitial, watchSelInitial bool, autoHide time.Duration, initX, initY float64, mood, subtext, say string, pulse bool, sigCh <-chan os.Signal) {
 	_ = os.Setenv("XT_NICHROME_CURSOR_DAEMON", "1")
 	var (
 		mu             sync.Mutex
@@ -132,11 +160,13 @@ func runDaemon(ctrl *companion.Controller, addr string, followInitial, watchSelI
 
 	// Seed lastSelection with whatever is already in primary selection at launch
 	// so we only trigger when the user highlights NEW text.
-	if initSel, err := companion.ReadPrimarySelection(); err == nil {
-		lastSelection = initSel
+	if watchSelInitial {
+		if initSel, err := companion.ReadPrimarySelection(); err == nil {
+			lastSelection = initSel
+		}
 	}
 
-	if followInitial || !watchSelInitial {
+	if !startHidden && (followInitial || !watchSelInitial) {
 		_, _ = ctrl.Apply(types.CompanionRequest{
 			Action:  "guide",
 			X:       &initX,
